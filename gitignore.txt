@@ -1,0 +1,15 @@
+node_modules/
+dist/
+test-results/
+output/
+data/
+recordings/
+.env
+.env.*
+.DS_Store
+.playwright-cli/
+*.csv
+*.mov
+*.mp4
+*.MP4
+*.zip
