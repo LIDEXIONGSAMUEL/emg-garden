@@ -35,7 +35,7 @@ npm start
 
 Open `http://127.0.0.1:5174/` in Chrome. That address is local to the computer running the command; it is not a shared website.
 
-**Start EMG Garden.command** installs dependencies if missing, builds the production application and starts it. The first setup requires an internet connection; an installed, built copy can run without downloading a model or contacting a service. Keep its Terminal window open. If macOS asks for permission, review the script before allowing it. The command-line instructions above remain available.
+**Start EMG Garden.command** installs dependencies if missing, builds the production application and starts it. A GitHub browser upload may not retain its executable bit. On a fresh checkout, run `chmod +x "Start EMG Garden.command"` once before double-clicking, or run `zsh "Start EMG Garden.command"`. The first setup requires an internet connection; an installed, built copy can run without downloading a model or contacting a service. Keep its Terminal window open. If macOS asks for permission, review the script before allowing it. The command-line instructions above remain available.
 
 For code development:
 
