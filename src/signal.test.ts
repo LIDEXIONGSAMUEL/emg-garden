@@ -1,5 +1,6 @@
 import {describe,it,expect} from 'vitest';
 import {Processor,calibrate,activity,parsePacket,parseCsv,rawCsv} from './signal';
+import * as signal from './signal';
 
 const samples=(n=8000,amplitude=.1,offset=1.5)=>Array.from({length:n},(_,index)=>({index,voltage:offset+amplitude*Math.sin(2*Math.PI*120*index/2000)}));
 describe('raw EMG processing',()=>{
@@ -32,6 +33,64 @@ describe('raw EMG processing',()=>{
     expect(()=>parseCsv('time,value\n0,1')).toThrow();
     expect(()=>parseCsv('sample_index,voltage_v,sample_rate\n0,NaN,2000')).toThrow();
     expect(()=>parseCsv('sample_index,voltage_v,sample_rate\n1,1.5,2000\n1,1.5,2000')).toThrow();
+  });
+});
+describe('recording provenance and safe replay',()=>{
+  it.each(['serial','simulation'] as const)('preserves %s provenance and ADC configuration through CSV',source=>{
+    const metadata={source,referenceV:5,adcMax:1023,notch50Hz:true},data=samples(1600,.2,4);
+    const recording=signal.parseRecordingCsv(rawCsv(data,metadata));
+    expect(recording).toEqual({samples:data,metadata});
+    const replay=new Processor(recording.metadata.notch50Hz??false,recording.metadata.referenceV,recording.metadata.adcMax).push(recording.samples);
+    expect(replay).toEqual(new Processor(true,5,1023).push(data));
+    expect(replay.at(-1)!.quality).toBe('good');
+  });
+  it('keeps legacy files unknown without inventing ADC configuration',()=>{
+    const data=samples(2);
+    expect(rawCsv(data).split('\n')[0]).toBe('sample_index,voltage_v,sample_rate');
+    expect(signal.parseRecordingCsv(rawCsv(data))).toEqual({samples:data,metadata:{source:'unknown',referenceV:null,adcMax:null,notch50Hz:null}});
+    expect(signal.parseRecordingCsv(rawCsv(data,{source:'unknown',referenceV:null,adcMax:null,notch50Hz:null})).metadata).toEqual({source:'unknown',referenceV:null,adcMax:null,notch50Hz:null});
+  });
+  it('rejects partial metadata columns',()=>{
+    expect(()=>parseCsv('sample_index,voltage_v,sample_rate,origin_source\n0,1,2000,serial\n1,1,2000,serial')).toThrow();
+  });
+  it.each([
+    ['serial,5,1023,true','simulation,5,1023,true'],
+    ['serial,5,1023,true','serial,3.3,1023,true'],
+    ['serial,5,1023,true','serial,5,4095,true'],
+    ['serial,5,1023,true','serial,5,1023,false'],
+    ['replay,5,1023,true','replay,5,1023,true'],
+    ['serial,0,1023,true','serial,0,1023,true'],
+    ['serial,5,12,true','serial,5,12,true'],
+    ['serial,5,1023,yes','serial,5,1023,yes'],
+    ['serial,NaN,1023,true','serial,NaN,1023,true'],
+  ])('rejects conflicting or invalid metadata %s / %s',(first,second)=>{
+    expect(()=>parseCsv(`sample_index,voltage_v,sample_rate,origin_source,reference_v,adc_max,notch_50hz\n0,1,2000,${first}\n1,1,2000,${second}`)).toThrow();
+  });
+  it('reports unknown quality when either ADC setting is missing',()=>{
+    expect(new Processor(false,null,null).push(samples()).at(-1)!.quality).toBe('unverified');
+    expect(new Processor(false,5,null).push(samples(1600,.1,0)).at(-1)!.quality).toBe('unverified');
+    expect(new Processor(false,null,1023).push(samples(1600)).at(-1)!.quality).toBe('unverified');
+    expect(new Processor(false,null,null).push(samples(4000,0)).at(-1)!.quality).toBe('flat');
+  });
+  it('places the feature at the center while preserving the window endpoint',()=>{
+    const frame=new Processor().push(samples(1400))[0];
+    expect(frame.startIndex).toBe(1000);expect(frame.endIndex).toBe(1399);
+    expect(frame.time).toBe(700);expect(frame.centerTime).toBe(600);
+  });
+  it('accepts longer recordings up to the twenty minute bound',()=>{
+    const text='sample_index,voltage_v,sample_rate\n'+Array.from({length:2_400_000},(_,i)=>`${i},1,2000`).join('\n');
+    expect(parseCsv(text)).toHaveLength(2_400_000);
+  },15000);
+  it('rejects recordings above the sample limit before reading rows',()=>{
+    expect(()=>parseCsv('sample_index,voltage_v,sample_rate\n'+'0,1,2000\n'.repeat(2_400_001))).toThrow(/20 minutes/);
+  });
+  it('rejects oversized CSV before splitting or parsing it',()=>{
+    expect(()=>parseCsv(' '.repeat(240_000_001))).toThrow(/240 MB/);
+  });
+  it('rejects unsafe indices in CSV, packets and processing',()=>{
+    expect(()=>parseCsv('sample_index,voltage_v,sample_rate\n0,1,2000\n9007199254740992,1,2000')).toThrow();
+    expect(()=>parsePacket(JSON.stringify({sampleRate:2000,referenceV:5,adcMax:1023,startIndex:Number.MAX_SAFE_INTEGER,samples:[1,2]}))).toThrow();
+    expect(()=>new Processor().push([{index:Number.MAX_SAFE_INTEGER,voltage:1}])).toThrow();
   });
 });
 describe('comfortable reference',()=>{
