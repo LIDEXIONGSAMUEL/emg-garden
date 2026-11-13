@@ -1,6 +1,34 @@
-import {it,expect} from 'vitest';
+import {it,expect,vi} from 'vitest';
 import {Engine,DemoSignal} from './engine';
 import {MAX_SAMPLES} from './signal';
+function classifierEngine(){
+  const e=new Engine('simulation');
+  e.model={mean:[0,0,0],scale:[1,1,1],k:5,training:([[0,0,0,0,0],[1,1,1,1,0],[0,0,1,1,2]] as const).flatMap((labels,cluster)=>labels.map((label,i)=>({trial:`${cluster}-${i}`,label,features:[cluster+1,cluster+1,cluster+1] as [number,number,number]})))};
+  const push=vi.spyOn(e.processor,'push');
+  const receive=(rms:number)=>{
+    const startIndex=e.windows.length*100,endIndex=startIndex+399;
+    push.mockReturnValueOnce([{time:(endIndex+1)/2,centerTime:(startIndex+200)/2,startIndex,endIndex,rms,mav:rms,wl:rms,quality:'good'}]);
+    e.receive([]);
+  };
+  return {e,receive};
+}
+it('shows uncertainty during a class change and exports only matching label confidence pairs',()=>{
+  const {e,receive}=classifierEngine();
+  receive(1);expect(e.classification).toBeNull();
+  receive(1);expect(e.classification).toEqual({label:0,confidence:1});
+  receive(2);expect(e.classification).toBeNull();
+  receive(2);expect(e.classification).toEqual({label:1,confidence:.8});
+  expect(e.export().windows.map(({label,confidence})=>({label,confidence}))).toEqual([
+    {label:null,confidence:null},{label:0,confidence:1},{label:null,confidence:null},{label:1,confidence:.8}
+  ]);
+});
+it('shows uncertainty when current confidence falls below the threshold despite an older majority',()=>{
+  const {e,receive}=classifierEngine();
+  receive(1);receive(1);expect(e.classification).toEqual({label:0,confidence:1});
+  receive(3);expect(e.classification).toBeNull();
+  expect(e.export().windows.at(-1)).toMatchObject({label:null,confidence:null});
+  receive(1);expect(e.classification).toEqual({label:0,confidence:1});
+});
 it('calibrates synthetic raw waveforms and preserves simulation provenance',()=>{
   const e=new Engine('simulation'),demo=new DemoSignal();
   e.receive(demo.next(2000,0));e.startCalibration();

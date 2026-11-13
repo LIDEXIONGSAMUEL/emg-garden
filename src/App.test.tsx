@@ -126,3 +126,109 @@ it('does not restore a deleted earlier round when another round saves progress',
   await act(async()=>{button('End session').click();});
   expect(loadResults().map(r=>r.number)).toEqual([2]);
 });
+it('shows consistent hand illustrations for relax, squeeze and steady instructions',async()=>{
+  await act(async()=>{button('Set my reference').click();});
+  expect(container.querySelector('[data-hand-action="relax"] svg')).not.toBeNull();
+  expect(container.querySelector('.instruction h1')?.textContent).toBe('Relax your hand');
+  await act(async()=>{vi.advanceTimersByTime(15000);});
+  expect(container.querySelector('[data-hand-action="squeeze"] svg')).not.toBeNull();
+  expect(container.querySelector('.instruction h1')?.textContent).toBe('Gently squeeze');
+  await act(async()=>{vi.advanceTimersByTime(55000);});
+  await act(async()=>{button('Start training').click();vi.advanceTimersByTime(31000);});
+  expect(container.querySelector('[data-hand-action="hold"] svg')).not.toBeNull();
+  expect(container.querySelector('.instruction h1')?.textContent).toBe('Keep steady');
+});
+it('confirms observed relaxation only during fresh running training rest',async()=>{
+  await act(async()=>{button('Set my reference').click();vi.advanceTimersByTime(70000);});
+  await act(async()=>{button('Start training').click();vi.advanceTimersByTime(35000);});
+  expect(container.querySelector('.instruction h1')?.textContent).toBe('Relax');
+  await act(async()=>{vi.advanceTimersByTime(1500);});
+  expect(container.querySelector('.instruction h1')?.textContent).toBe('Hand relaxed');
+  expect(container.querySelector('[data-hand-action="relaxed"] svg')).not.toBeNull();
+  await act(async()=>{button(/^Ⅱ/).click();});
+  expect(container.querySelector('.instruction h1')?.textContent).toBe('Take a break');
+  expect(container.querySelector('[data-hand-action="relaxed"]')).toBeNull();
+  await act(async()=>{button('Continue').click();});
+  expect(container.querySelector('.instruction h1')?.textContent).toBe('Relax');
+  await act(async()=>{vi.advanceTimersByTime(500);});
+  expect(container.querySelector('.instruction h1')?.textContent).toBe('Hand relaxed');
+  await act(async()=>{vi.advanceTimersByTime(3000);});
+  expect(container.querySelector('[data-hand-action="relaxed"]')).toBeNull();
+});
+it('uses the same short title for optional speech without repeating unchanged cues',async()=>{
+  const speak=vi.fn(),cancel=vi.fn();
+  vi.stubGlobal('speechSynthesis',{speak,cancel});
+  vi.stubGlobal('SpeechSynthesisUtterance',class {lang='';rate=1;constructor(public text:string){}});
+  const toggle=Array.from(container.querySelectorAll('label')).find(l=>l.textContent?.includes('Spoken cues'))!.querySelector('input')!;
+  await act(async()=>{toggle.click();});
+  expect(speak.mock.calls.at(-1)?.[0].text).toBe(container.querySelector('.instruction h1')?.textContent);
+  await act(async()=>{button('Set my reference').click();});
+  expect(speak.mock.calls.at(-1)?.[0].text).toBe('Relax your hand');
+  const count=speak.mock.calls.length;
+  await act(async()=>{vi.advanceTimersByTime(1000);});expect(speak).toHaveBeenCalledTimes(count);
+});
+async function runScenario(kind:'unsteady'|'drift'|'gap'){
+  const select=container.querySelector<HTMLSelectElement>('[aria-label="Synthetic check"]');
+  expect(select).not.toBeNull();
+  await act(async()=>{select!.value=kind;select!.dispatchEvent(new Event('change',{bubbles:true}));});
+  await act(async()=>{button('Run synthetic check').click();});
+}
+it('runs a bounded synthetic check and records its identity without allowing conflicting reference steps',async()=>{
+  const bodies:string[]=[];
+  vi.stubGlobal('Blob',class {constructor(parts:string[]){bodies.push(parts.join(''));}});
+  await runScenario('drift');
+  expect(container.querySelector('.simulation-check')?.textContent).toContain('8 seconds');
+  expect(button('Set my reference').disabled).toBe(true);
+  await act(async()=>{vi.advanceTimersByTime(8000);});
+  expect(container.querySelector('.simulation-check')).toBeNull();expect(button('Set my reference').disabled).toBe(false);
+  await act(async()=>{button('Download session JSON').click();});
+  const data=JSON.parse(bodies.at(-1)!);
+  expect(data.source).toBe('simulation');
+  expect(data.events.filter((event:{event:string})=>event.event.startsWith('simulation_scenario_')).map((event:{event:string;detail:unknown})=>[event.event,event.detail])).toEqual([
+    ['simulation_scenario_started',{scenario:'drift',durationMs:8000}],['simulation_scenario_ended',{scenario:'drift'}]
+  ]);
+  await act(async()=>{button('Set my reference').click();});expect(button('Run synthetic check').disabled).toBe(true);
+});
+it('keeps the gap check paused after input recovers until Continue is pressed',async()=>{
+  await act(async()=>{button('Set my reference').click();vi.advanceTimersByTime(70000);});
+  await act(async()=>{button('Start training').click();vi.advanceTimersByTime(31000);});
+  await runScenario('gap');
+  await act(async()=>{vi.advanceTimersByTime(2550);});
+  expect(container.querySelector('.instruction h1')?.textContent).toBe('Take a break');
+  expect(button('Continue').disabled).toBe(true);
+  expect(container.querySelector('.tools-grid dl')?.textContent).toContain('Settling signal');
+  expect(container.querySelector('.tools-grid dl')?.textContent).toContain('Waiting for signal');
+  expect(container.textContent).toContain('0 of 30 trials completed');
+  await act(async()=>{vi.advanceTimersByTime(650);});
+  expect(button('Continue').disabled).toBe(false);
+  await act(async()=>{vi.advanceTimersByTime(9800);});
+  expect(container.querySelector('.instruction h1')?.textContent).toBe('Take a break');
+  expect(container.textContent).toContain('0 of 30 trials completed');
+  expect(button('Continue').disabled).toBe(false);
+  await act(async()=>{button('Continue').click();vi.advanceTimersByTime(1000);});
+  expect(container.querySelector('.instruction h1')?.textContent).not.toBe('Take a break');
+});
+it('does not reveal relaxation confirmation or allow checks during held-out collection or replay',async()=>{
+  await act(async()=>{button('Set my reference').click();vi.advanceTimersByTime(70000);});
+  await act(async()=>{button('Collect 18 labelled trials').click();vi.advanceTimersByTime(126500);});
+  expect(button('Run synthetic check').disabled).toBe(true);
+  expect(container.querySelector('[data-hand-action="relaxed"]')).toBeNull();
+  await act(async()=>{button('Stop this step').click();});
+  vi.spyOn(window,'confirm').mockReturnValue(true);
+  await chooseFile('Replay raw CSV',rawCsv(Array.from({length:4000},(_,index)=>({index,voltage:1.5+.1*Math.sin(index*.3)}))));
+  expect(container.querySelector('[data-hand-action]')).toBeNull();
+  expect(container.querySelector('[aria-label="Synthetic check"]')).toBeNull();
+});
+it('clears and records a cancelled synthetic check when the signal is stopped',async()=>{
+  const bodies:string[]=[];
+  vi.stubGlobal('Blob',class {constructor(parts:string[]){bodies.push(parts.join(''));}});
+  await runScenario('unsteady');
+  await act(async()=>{vi.advanceTimersByTime(1000);button('Disconnect / stop signal').click();});
+  expect(container.querySelector('.simulation-check')).toBeNull();
+  expect(button('Run synthetic check').disabled).toBe(true);
+  await act(async()=>{button('Download session JSON').click();});
+  const events=JSON.parse(bodies.at(-1)!).events;
+  expect(events.filter((event:{event:string})=>event.event==='simulation_scenario_ended')).toMatchObject([
+    {detail:{scenario:'unsteady',cancelled:true}}
+  ]);
+});

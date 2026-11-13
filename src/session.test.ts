@@ -68,3 +68,28 @@ it('marks only the last two complete trials per class as held out',()=>{
   for(let t=50;t<=120000;t+=50)col.push(frame(t,.3));
   expect(col.trial).toBe(12);expect(col.testing).toBe(true);
 });
+it('acknowledges only a currently sustained relaxation without changing the saved onset',()=>{
+  const s=new TrainingSession(c);s.start(0);
+  for(let t=50;t<=35000;t+=50)s.push(frame(t,s.phase==='contract'?s.target:0));
+  expect(s.relaxed).toBe(false);
+  for(let t=35050;t<=35300;t+=50)s.push(frame(t,0));
+  expect(s.relaxed).toBe(false);
+  s.push(frame(35350,0));expect(s.relaxed).toBe(true);
+  s.push(frame(35400,.3));expect(s.relaxed).toBe(false);
+  s.push(frame(35450,.3));expect(s.relaxed).toBe(false);
+  for(let t=35500;t<=35900;t+=50)s.push(frame(t,0));
+  expect(s.relaxed).toBe(true);
+  s.pause();expect(s.relaxed).toBe(false);s.resume(35900);expect(s.relaxed).toBe(false);
+  for(let t=35950;t<=40000;t+=50)s.push(frame(t,0));
+  expect(s.phase).toBe('contract');expect(s.relaxed).toBe(false);
+  expect(s.results[0].relaxationMs).toBe(50);
+});
+it('never confirms relaxation from poor or missing signal',()=>{
+  for(const fault of ['clipped','gap'] as const){
+    const s=new TrainingSession(c);s.start(0);
+    for(let t=50;t<=36000;t+=50)s.push(frame(t,s.phase==='contract'?s.target:0));
+    expect(s.relaxed).toBe(true);
+    s.push(fault==='gap'?frame(36500,0):{...frame(36050,0),quality:'clipped'});
+    expect(s.state).toBe('paused');expect(s.relaxed).toBe(false);
+  }
+});

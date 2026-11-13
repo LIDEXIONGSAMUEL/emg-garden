@@ -32,7 +32,7 @@ export class Engine {
       if(this.model&&f.quality==='good'){
         const prediction=predict(this.model,[f.rms,f.mav,f.wl]);this.votes.push(prediction.confidence>=.6?prediction.label:-1);this.votes=this.votes.slice(-3);
         const label=[0,1,2].find(l=>this.votes.filter(v=>v===l).length>=2);
-        this.classification=label===undefined?null:{label,confidence:prediction.confidence};
+        this.classification=label===prediction.label&&prediction.confidence>=.6?prediction:null;
       }
       this.windows.push({...f,activity:this.calibration?this.level:null,label:this.classification?.label??null,confidence:this.classification?.confidence??null});
       const stage=JSON.stringify({calibration:this.calibrationRun?.state,calibrationStep:this.calibrationRun?.step,session:this.session?.state,sessionPhase:this.session?.phase,trial:this.session?this.session.trial+1:null,collection:this.collection?.state,collectionTrial:this.collection?this.collection.trial+1:null,conditionId:this.conditionId});

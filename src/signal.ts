@@ -30,6 +30,7 @@ export class Processor {
   private filters:Filter[]=[];private values:number[]=[];private clips:boolean[]=[];
   private last=-1;private received=0;private step=0;
   constructor(public notch=false,public referenceV:number|null=3.3,public adcMax:number|null=4095){this.reset();}
+  get ready(){return this.values.length===WINDOW;}
   private reset(){this.filters=[new Filter('high',20),new Filter('low',450),...(this.notch?[new Filter('notch',50,25)]:[])];this.values=[];this.clips=[];this.received=0;this.step=0;}
   push(samples:Sample[]):Frame[]{
     const frames:Frame[]=[];

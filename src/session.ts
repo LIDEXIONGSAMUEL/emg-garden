@@ -12,6 +12,7 @@ export class TrainingSession {
   get remaining(){return Math.max(0,((this.phase==='familiar'?30000:5000)-(this.lastTime-this.phaseAt))/1000);}
   get block(){return this.trial<6?'baseline':this.trial<24?'practice':'final';}
   get round(){return this.trial<6||this.trial>=24?1:Math.floor((this.trial-6)/6)+1;}
+  get relaxed(){return this.state==='running'&&this.phase==='rest'&&this.previous!==null&&this.previous.rms<=this.calibration.restThreshold&&this.relaxAt!==null&&this.lastTime-this.relaxAt>=300;}
   start(t:number){if(this.state!=='ready')return;this.state='running';this.phaseAt=t;this.lastTime=t;}
   pause(reason='Take a break.'){
     if(this.state!=='running')return;this.state='paused';this.pausedAt=this.lastTime;this.previous=null;this.hold=0;this.relaxAt=null;this.interrupted=true;this.message=reason;
