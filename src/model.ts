@@ -1,4 +1,4 @@
-export type Example={trial:string;label:0|1|2;features:[number,number,number]};
+export type Example={trial:string;label:0|1|2;features:[number,number,number];startIndex?:number;endIndex?:number;centerTime?:number};
 export type Model={mean:number[];scale:number[];training:Example[];k:5};
 export type ModelReport={trainingTrials:string[];testTrials:string[];matrix:number[][];recall:number[];accuracy:number};
 export function predict(model:Model,features:number[]){
