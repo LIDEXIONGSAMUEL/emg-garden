@@ -3,6 +3,8 @@
 | Flow | Preconditions and checks | State change | Failure behavior |
 | --- | --- | --- | --- |
 | Start simulation | Explicit click, confirm before replacing recorded data | Local synthetic samples and provenance are created | Cancellation keeps current data |
+| Synthetic check | Simulation running, no active check/reference/collection | Eight seconds of unsteady effort, drift or omitted samples; start/end events recorded | Gap pauses training; stop cancels the check; only a new processed window permits explicit Continue |
+| Relax confirmation | Running training rest, clean fresh processed window, existing rest threshold sustained for 300 ms | Current hand cue shows a check; no score changes | Renewed activity, pause, missing data or next phase removes the confirmation; no held-out/replay feedback |
 | Connect serial | Secure localhost/HTTPS, supported Chrome API, user selects a permitted port | Local stream is opened and validated packet by packet | Unsupported/cancelled/invalid input is shown, not fabricated |
 | Start a protocol step | Clean known-quality data, reference if needed, no conflicting step, full-step capacity | Timed reference/collection/session begins on the sample clock | State is not cleared if capacity/reference checks fail |
 | Pause / hide / lose data | User action, visibility event or continuity/freshness check | Scoring stops; affected scored trial is invalid | Missing time never earns target coverage |
