@@ -1,6 +1,6 @@
 # EMG Garden setup
 
-EMG Garden 1.0.0 is an English local software release for an EMG biofeedback research prototype. Real device and clinical validation remain pending.
+EMG Garden 1.0.1 is an English local software release for an EMG biofeedback research prototype. Real device and clinical validation remain pending.
 
 1. Connect a compatible raw EMG device, or select **Try simulation**.
 2. Select **Set my reference**. Relax for 15 seconds, then follow three comfortable five-second contractions with rests between them.
