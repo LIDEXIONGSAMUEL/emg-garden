@@ -4,7 +4,7 @@ Local software for a single-channel forearm EMG biofeedback research prototype. 
 
 ## Current status
 
-Version 1.0.0 implements the device-independent workflow, saved result summaries, self-describing recordings and inspection-only replay. See STATUS.md for the checks actually completed and remaining physical-device validation. A software release is not a validated medical device or evidence of clinical benefit.
+Version 1.0.1 implements the device-independent workflow, saved result summaries, self-describing recordings and inspection-only replay. See STATUS.md for the checks actually completed and remaining physical-device validation. A software release is not a validated medical device or evidence of clinical benefit.
 
 The simulation generates synthetic raw waveforms. It is visibly labelled and must never be reported as a person's EMG or training outcome. No camera is required.
 
@@ -53,6 +53,10 @@ After calibration, **Start training** runs a 30-second familiarization followed 
 
 Without a sensor, following the instructions with your hand does not produce a measurement. Automatic simulation is only a software demonstration; the manual slider also generates synthetic signal. Real muscle-control practice requires a compatible EMG device.
 
+The active cue now uses a consistent hand drawing. Open hand means relax or ease; a gently closed hand means squeeze or hold. The short English title is also the optional spoken cue. During a training rest, **Hand relaxed** and a check appear only after clean activity has stayed below the existing rest threshold for 300 ms. The confirmation disappears on renewed activity, pause or loss of fresh signal. This feedback does not change scoring and is not shown during held-out classifier examples or replay.
+
+In **Setup & research tools**, **Simulation controls** provides optional eight-second **Synthetic check** scenarios. **Unsteady effort** and **Effort drift** deliberately move generated activity away from the target, then recover. **Sample gap** omits 500 ms of samples and pauses active training. **Continue** stays disabled until a new processed window is available; it never resumes automatically. Reference calibration and labelled collection cannot overlap a check. Stopping the signal cancels the active check. Session JSON records its start and end or cancellation. These checks test software behavior, not actual electrode noise, a person's control or model accuracy. Normal automatic and manual simulation remain available.
+
 ## Saved results and replay
 
 Completed trials are saved automatically as a small result summary on the current browser/profile/origin. Open **Setup & research tools**, then **Saved results** and **View**. A running round saved before interruption is marked interrupted and reopens read-only, not as resumable scoring. Each round keeps its own calibration and a snapshot of the model report available when that round started. Missing historical reports remain unknown. The store holds up to 50 summaries and will not silently erase an old one. **Delete** removes only the confirmed item; later rounds do not restore it.
@@ -77,7 +81,7 @@ The initial processing configuration is 2000 Hz, causal 20–450 Hz filtering, o
 
 Calibration is not classifier training. In research tools, **Collect 18 labelled trials** records six trials per prompted state. Review whether the actual signal matches those prompts before fitting the classifier. If the labels cannot be confirmed, repeat the collection rather than fitting. The first four whole trials per state train the model; the last two test it, with effort feedback hidden. Complete feature windows stay inside the retained one-to-four-second portion. Overlapping windows never cross the split. Scaling is computed from training data only.
 
-Water uses continuous normalized RMS. Classifier confidence does not control water strength. The confusion matrix and accuracy count feature windows from six held-out complete trials. Held-out accuracy on one recording does not establish generalization to another person or another electrode placement. Synthetic results cannot validate a real-data classifier.
+Water uses continuous normalized RMS. Classifier confidence does not control water strength. The confusion matrix and accuracy count feature windows from six held-out complete trials. Held-out accuracy on one recording does not establish generalization to another person or another electrode placement. Synthetic results cannot validate a real-data classifier. A label is displayed only when the current prediction agrees with the majority of the last three frames and its kNN vote fraction is at least 0.60. Otherwise the display and exported window remain uncertain. The vote fraction is not a calibrated probability.
 
 ## Data and privacy
 
@@ -100,4 +104,4 @@ Window `time` is the endpoint used by live scoring; `centerTime` is the complete
 - `src/records.ts`: validated per-round results and browser-local storage.
 - `scripts/serve.mjs`: localhost-only production static server.
 
-See `CONTRIBUTING.md` for team workflow, `STATUS.md` for evidence, and `documentation/architecture.md` for the data, privacy and test map. This local update does not automatically update the shared repository or the older camera website.
+See `CONTRIBUTING.md` for team workflow, `STATUS.md` for evidence, and `documentation/architecture.md` for the data, privacy and test map. The team uses the `main` branch for shared releases. After an update, preserve any uncommitted work, pull `main`, run `npm ci` and `npm run build`, then restart the local server. The EMG application is separate from the older camera website. Version 1.0.1 keeps the `emg-garden-1.0.0` export schema because the file format is unchanged.
