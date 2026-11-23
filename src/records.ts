@@ -1,11 +1,14 @@
 import type {Calibration,OriginalSource} from './signal';
-import type {TrialResult} from './session';
-import type {Engine,Source} from './engine';
+import type {CalibrationProtocol,TrialResult} from './session';
+import type {AcquisitionSetup,Engine,Source} from './engine';
 import type {ModelReport} from './model';
+import {DEFAULT_EMG_BAUD,UNO_EMG_BAUD,type EmgBaudRate} from './serial';
 
 type Config=ReturnType<Engine['export']>['config'];
+export type SavedReference={conditionId:string;config:Config;calibration:Calibration;setup:AcquisitionSetup;baudRate:EmgBaudRate;protocol?:CalibrationProtocol};
 export type SavedResult={schema:'emg-garden-result/1';id:string;createdAt:string;source:Source;originalSource:OriginalSource;state:'complete'|'stopped'|'interrupted';number:number;conditionId:string;config:Config;calibration:Calibration;results:TrialResult[];modelReport:ModelReport|null};
 const KEY='emg-garden.saved-results.v1';
+const REFERENCE_KEY='emg-garden.saved-reference.v1';
 type Obj=Record<string,unknown>;
 const invalid=()=>new Error('Invalid results file. Use an EMG Garden session export.');
 function object(v:unknown):Obj{if(!v||typeof v!=='object'||Array.isArray(v))throw invalid();return v as Obj;}
@@ -14,17 +17,48 @@ function text(v:unknown,max=200){if(typeof v!=='string'||!v.length||v.length>max
 function bool(v:unknown){if(typeof v!=='boolean')throw invalid();return v;}
 function values(v:unknown,max:number){if(!Array.isArray(v)||v.length>max)throw invalid();return v;}
 const nullable=(v:unknown,min=-Infinity,max=Infinity)=>v===null?null:num(v,min,max);
-function calibration(v:unknown):Calibration{
-  const c=object(v),baseline=num(c.baseline,0,5.5),reference=num(c.reference,0,5.5),restThreshold=num(c.restThreshold,0,5.5),noise=num(c.noise,0,5.5);
+function calibration(v:unknown,max:number):Calibration{
+  const c=object(v),baseline=num(c.baseline,0,max),reference=num(c.reference,0,max),restThreshold=num(c.restThreshold,0,max),noise=num(c.noise,0,max);
   if(reference<=restThreshold||restThreshold<baseline||reference-baseline<=3*noise)throw invalid();
   return {baseline,reference,restThreshold,noise};
 }
 function config(v:unknown):Config{
   const c=object(v);
-  if(c.sampleRate!==2000||c.windowSamples!==400||c.stepSamples!==100||c.highpassHz!==20||c.lowpassHz!==450||c.referenceType!=='comfortable_not_MVC'||c.amplitudeUnit!=='module_output_volts')throw invalid();
+  if(c.sampleRate!==2000||c.windowSamples!==400||c.stepSamples!==100||c.highpassHz!==20||c.lowpassHz!==450||c.referenceType!=='comfortable_not_MVC'||
+    c.amplitudeUnit!=='module_output_volts'&&c.amplitudeUnit!=='adc_counts')throw invalid();
   const referenceV=nullable(c.referenceV,Number.MIN_VALUE,5.5),adcMax=nullable(c.adcMax,255,65535);
-  if(adcMax!==null&&!Number.isInteger(adcMax))throw invalid();
-  return {sampleRate:2000,windowSamples:400,stepSamples:100,warmupSamples:num(c.warmupSamples,0,2000),highpassHz:20,lowpassHz:450,notch50Hz:c.notch50Hz===null?null:bool(c.notch50Hz),referenceV,adcMax,amplitudeUnit:'module_output_volts',referenceType:'comfortable_not_MVC'};
+  if(adcMax!==null&&!Number.isInteger(adcMax)||c.amplitudeUnit==='adc_counts'&&(referenceV!==null||adcMax===null))throw invalid();
+  if(c.notch100Hz!==undefined&&(c.notch100Hz!==true||c.notch50Hz!==true))throw invalid();
+  return {sampleRate:2000,windowSamples:400,stepSamples:100,warmupSamples:num(c.warmupSamples,0,2000),highpassHz:20,lowpassHz:450,notch50Hz:c.notch50Hz===null?null:bool(c.notch50Hz),...(c.notch100Hz===true?{notch100Hz:true as const}:{}),referenceV,adcMax,amplitudeUnit:c.amplitudeUnit,referenceType:'comfortable_not_MVC'};
+}
+function parseReference(v:unknown):SavedReference{
+  const record=object(v),settings=config(record.config),setup=object(record.setup);
+  const {baudRate,protocol}=record;
+  if(baudRate!==UNO_EMG_BAUD&&baudRate!==DEFAULT_EMG_BAUD)throw invalid();
+  if(protocol!==undefined&&protocol!=='quick'&&protocol!=='full')throw invalid();
+  if(settings.adcMax===null||settings.notch50Hz===null||
+    settings.amplitudeUnit==='module_output_volts'&&settings.referenceV===null)throw invalid();
+  return {
+    conditionId:text(record.conditionId),config:settings,
+    calibration:calibration(record.calibration,settings.amplitudeUnit==='adc_counts'?settings.adcMax:5.5),
+    setup:{device:setup.device===''?'':text(setup.device,120),electrodePlacement:setup.electrodePlacement===''?'':text(setup.electrodePlacement,120)},
+    baudRate,protocol,
+  };
+}
+export function loadReference():SavedReference|null{
+  try{
+    const stored=localStorage.getItem(REFERENCE_KEY);
+    return stored?parseReference(JSON.parse(stored)):null;
+  }catch{return null;}
+}
+export function saveReference(value:SavedReference){
+  const record=parseReference(value);
+  localStorage.setItem(REFERENCE_KEY,JSON.stringify(record));
+  return record;
+}
+export function matchesReference(value:SavedReference,settings:Config,baudRate:EmgBaudRate){
+  return value.baudRate===baudRate&&value.config.notch100Hz===settings.notch100Hz&&(Object.keys(settings) as (keyof Config)[])
+    .every(key=>settings[key]===value.config[key]);
 }
 function trial(v:unknown):TrialResult{
   const r=object(v),n=num(r.trial,1,30),block=n<=6?'baseline':n<=24?'practice':'final',round=block==='practice'?Math.floor((n-7)/6)+1:1;
@@ -55,8 +89,10 @@ function saved(v:unknown):SavedResult{
   const r=object(v),source=text(r.source),originalSource=text(r.originalSource),state=text(r.state),createdAt=text(r.createdAt),number=num(r.number,1,50);
   if(r.schema!=='emg-garden-result/1'||!['simulation','serial','replay'].includes(source)||!['simulation','serial','unknown'].includes(originalSource)||source!=='replay'&&source!==originalSource||!['complete','stopped','interrupted'].includes(state)||!Number.isFinite(Date.parse(createdAt))||!Number.isInteger(number))throw invalid();
   const results=values(r.results,30).map(trial);
+  const settings=config(r.config);
+  if(settings.amplitudeUnit==='adc_counts'&&originalSource!=='serial')throw invalid();
   if(results.some((t,i)=>t.trial!==i+1)||state==='complete'&&results.length!==30)throw invalid();
-  return {schema:'emg-garden-result/1',id:text(r.id),createdAt,source:source as Source,originalSource:originalSource as OriginalSource,state:state as SavedResult['state'],number,conditionId:text(r.conditionId),config:config(r.config),calibration:calibration(r.calibration),results,modelReport:report(r.modelReport)};
+  return {schema:'emg-garden-result/1',id:text(r.id),createdAt,source:source as Source,originalSource:originalSource as OriginalSource,state:state as SavedResult['state'],number,conditionId:text(r.conditionId),config:settings,calibration:calibration(r.calibration,settings.amplitudeUnit==='adc_counts'?settings.adcMax!:5.5),results,modelReport:report(r.modelReport)};
 }
 export function parseResultFile(input:string):SavedResult[]{
   if(input.length>20_000_000)throw new Error('Choose a results JSON smaller than 20 MB.');

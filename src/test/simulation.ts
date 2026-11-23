@@ -1,7 +1,18 @@
-import {DemoSignal} from './engine';
-import {SAMPLE_RATE,type Sample} from './signal';
+import {SAMPLE_RATE,type Sample} from '../signal';
 
-export type SimulationScenario='unsteady'|'drift'|'gap';
+export class DemoSignal {
+  index=0;private effort=0;private seed=21;
+  next(n:number,target:number):Sample[]{
+    return Array.from({length:n},()=>{
+      this.effort+=(target-this.effort)*.003;this.seed=(Math.imul(this.seed,1664525)+1013904223)>>>0;
+      const i=this.index++,t=i/2000,carrier=Math.sin(2*Math.PI*120*t)+.35*Math.sin(2*Math.PI*230*t)+.2*Math.sin(2*Math.PI*77*t);
+      const voltage=1.5+(.001+.28*this.effort*(1+.018*Math.sin(2*Math.PI*.7*t)))*carrier+.003*(this.seed/4294967296-.5);
+      return {index:i,voltage};
+    });
+  }
+}
+
+type SimulationScenario='unsteady'|'drift'|'gap';
 
 export class SimulationSignal {
   private signal=new DemoSignal();

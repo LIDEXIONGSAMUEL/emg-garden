@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import {beforeEach,expect,it,vi} from 'vitest';
-import {Engine,DemoSignal} from './engine';
+import {Engine} from './engine';
+import {DemoSignal} from './test/simulation';
 import {parseResultFile,loadResults,saveResults,deleteResult} from './records';
 
 function recording(){

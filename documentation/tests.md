@@ -13,10 +13,9 @@
 | Model evaluation | Whole-trial split, training-only statistics, invalid labels rejected | src/model.test.ts | Existing |
 | Traceability/capacity | Named events, timing ranges, condition reference; insufficient capacity preserves state | src/engine.test.ts | Existing |
 | Saved results | Upsert/reload, independent rounds, legacy import, invalid/large files, full/blocked store and isolated delete | src/records.test.ts | Existing |
-| User interface | Full simulation, refresh/read-only result review, separate downloads, guarded source changes, replay controls, hidden held-out feedback, failed-save download | src/App.test.tsx | Existing |
+| User interface | Mocked serial training, refresh/read-only result review, separate downloads, guarded source changes, replay controls, hidden held-out feedback, failed-save download | src/App.test.tsx | Existing |
 | Guided cues and relaxation | Consistent SVG hand cues, matching optional speech, current sustained rest only, first renewed activity immediately clears check | src/App.test.tsx, src/session.test.ts | Added |
 | Synthetic stress checks | Unchanged normal waveform; deterministic eight-second disturbance, recovery, exact omitted indices, no paused scoring | src/simulation.test.ts | Added |
-| Check integration | Logged start/end/cancel, reference/collection exclusion, post-gap warm-up disables Continue, explicit resume, stop clears countdown | src/App.test.tsx | Added |
 | Production server | Static MIME/HEAD, path and symlink safety, wrong methods, matching and wrong occupied ports, absent builds | scripts/serve.test.mjs | Existing |
 
 npm test runs the full application suite and actual Node HTTP fixture tests. npm run build checks TypeScript and produces the static bundle. The shared repository does not yet enforce these as remote merge gates; contributors must run them and include evidence before review.
@@ -29,7 +28,7 @@ The later guided-feedback update on the same date passed 92 application tests an
 
 Use target Mac Chrome against the production build. Record actual results in STATUS.md, not inferred from this checklist.
 
-- Full synthetic reference, familiarization pause/resume and 30-trial completion.
+- Live reference, familiarization pause/resume and 30-trial completion.
 - 18 example trials, held-out feedback hidden, operator review and kNN fitting.
 - Reopen saved results after refresh without restarting scoring.
 - Import valid/invalid recordings; verify replay pause, restart, end and source/config retention.

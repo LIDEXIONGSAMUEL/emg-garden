@@ -1,6 +1,6 @@
 import {it,expect} from 'vitest';
-import {Engine,DemoSignal} from './engine';
-import {SimulationSignal} from './simulation';
+import {Engine} from './engine';
+import {DemoSignal,SimulationSignal} from './test/simulation';
 import {mean,sd} from './signal';
 
 function calibrated(){

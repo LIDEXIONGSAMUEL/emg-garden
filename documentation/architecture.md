@@ -1,6 +1,6 @@
 # Architecture
 
-EMG Garden is a local browser application for comfortable forearm-control biofeedback research. The device-independent release provides synthetic demonstration, waveform inspection, a fixed protocol, optional kNN testing and saved results. It does not establish treatment effectiveness or validate an acquisition device.
+EMG Garden is a local browser application for comfortable forearm-control biofeedback research. The application provides live serial training, waveform inspection, a fixed protocol, optional kNN testing and saved results. Synthetic signals are generated in automated tests, and saved simulation files can still be opened for inspection. It does not establish treatment effectiveness or validate an acquisition device.
 
 | Part | Responsibility |
 | --- | --- |

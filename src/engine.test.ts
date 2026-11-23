@@ -1,5 +1,6 @@
 import {it,expect,vi} from 'vitest';
-import {Engine,DemoSignal} from './engine';
+import {Engine} from './engine';
+import {DemoSignal} from './test/simulation';
 import {MAX_SAMPLES} from './signal';
 function classifierEngine(){
   const e=new Engine('simulation');
@@ -36,6 +37,20 @@ it('calibrates synthetic raw waveforms and preserves simulation provenance',()=>
   expect(e.calibration).not.toBeNull();expect(e.export().source).toBe('simulation');
   expect(e.export().config.sampleRate).toBe(2000);
 });
+it('keeps acquisition notes tied to their serial calibration conditions',()=>{
+  const engine=new Engine('serial'),demo=new DemoSignal();
+  engine.receive(demo.next(2000,0));
+  const setup={device:' Uno and Aries ',electrodePlacement:' Right forearm '};
+  engine.startCalibration(setup);
+  engine.interrupt('Relocated electrodes.');
+  setup.electrodePlacement='Left forearm';
+  engine.startCalibration(setup);
+  const notes=engine.export().events.filter(event=>event.event==='calibration_started').map(event=>event.detail);
+  expect(notes).toEqual([
+    {conditionId:engine.createdAt+':reference-1',protocol:'full',acquisition:{device:'Uno and Aries',electrodePlacement:'Right forearm'}},
+    {conditionId:engine.createdAt+':reference-2',protocol:'full',acquisition:{device:'Uno and Aries',electrodePlacement:'Left forearm'}},
+  ]);
+});
 it('completes the full calibrated protocol with 30 scored synthetic trials',()=>{
   const e=new Engine('simulation'),demo=new DemoSignal();e.receive(demo.next(2000,0));e.startCalibration();
   for(let n=0;n<1420;n++)e.receive(demo.next(100,e.calibrationRun?.instruction==='contract'?1:0));
@@ -52,6 +67,16 @@ it('invalidates active control on a sequence discontinuity',()=>{
   e.calibration={baseline:.002,reference:.2,restThreshold:.003,noise:.0001};e.startTraining();
   const chunk=demo.next(100,.3).map(s=>({...s,index:s.index+1000}));e.receive(chunk);
   expect(e.session!.state).toBe('paused');expect(e.session!.results).toHaveLength(0);
+});
+it('leaves raw data usable and pauses on a repeated or reordered serial packet',()=>{
+  const e=new Engine('serial'),demo=new DemoSignal();
+  const packet=demo.next(2000,0);
+  e.receive(packet);
+  e.calibration={baseline:.002,reference:.2,restThreshold:.003,noise:.0001};
+  e.startTraining();
+  expect(()=>e.receive(packet)).toThrow(/Duplicate or reordered/);
+  expect(e.raw).toHaveLength(2000);
+  expect(e.session!.state).toBe('paused');
 });
 it('keeps completed round results and their reference when another round starts',()=>{
   const e=new Engine('simulation'),demo=new DemoSignal();e.receive(demo.next(2000,0));

@@ -1,6 +1,21 @@
 export type Example={trial:string;label:0|1|2;features:[number,number,number];startIndex?:number;endIndex?:number;centerTime?:number};
 export type Model={mean:number[];scale:number[];training:Example[];k:5};
 export type ModelReport={trainingTrials:string[];testTrials:string[];matrix:number[][];recall:number[];accuracy:number};
+
+export class PredictionHistory {
+  private votes:number[]=[];
+  current:{label:number;confidence:number}|null=null;
+
+  reset(){this.votes=[];this.current=null;}
+
+  push(model:Model,features:number[]){
+    const prediction=predict(model,features);
+    this.votes.push(prediction.confidence>=.6?prediction.label:-1);
+    this.votes=this.votes.slice(-3);
+    const label=[0,1,2].find(value=>this.votes.filter(vote=>vote===value).length>=2);
+    this.current=label===prediction.label&&prediction.confidence>=.6?prediction:null;
+  }
+}
 export function predict(model:Model,features:number[]){
   const distances=model.training.map(e=>({label:e.label,d:e.features.reduce((sum,x,i)=>sum+((x-features[i])/model.scale[i])**2,0)})).sort((a,b)=>a.d-b.d).slice(0,model.k);
   const votes=[0,0,0];distances.forEach(e=>votes[e.label]++);

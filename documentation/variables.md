@@ -11,7 +11,7 @@
 | 20 MB result JSON | Result import | File size and parser checks | Large incompatible files reject without replacing current data |
 | Comfortable B, R, rest threshold | Water and results | Per-reference calibration | Not MVC, grip force or a health score |
 
-There are no API keys, client-side secrets, tokens or paid-service credentials in this application. No environment file is required. The build bundles local code and system-font styling; hardware is not needed to run simulation. Optional speech cues depend on browser/OS speech support.
+There are no API keys, client-side secrets, tokens or paid-service credentials in this application. No environment file is required. The build bundles local code and system-font styling. Replay and saved results can be inspected without hardware. Optional speech cues depend on browser/OS speech support.
 
 ## Before delivery
 

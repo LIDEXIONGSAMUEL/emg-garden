@@ -7,6 +7,7 @@
     "dev": "vite --host 127.0.0.1 --port 5174 --strictPort",
     "build": "tsc --noEmit && vite build",
     "start": "node scripts/serve.mjs",
+    "audit:recording": "node scripts/audit-recording.mjs",
     "preview": "vite preview --host 127.0.0.1 --port 5174 --strictPort",
     "test": "vitest run src && node --test scripts/serve.test.mjs"
   },

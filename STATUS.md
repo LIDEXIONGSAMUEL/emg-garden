@@ -2,6 +2,16 @@
 
 Date: 2026-11-13. This release combines the previously tested local stable features and guided feedback with a classifier display fix. Repository publication is verified separately through the resulting main-branch commit.
 
+## Local integration checks on 23 November 2026
+
+- A clean Windows install using Node v24.14.0 completed `npm ci`, 110 application tests, six server tests and the production build. The extracted offline package launched without installing dependencies and the browser opened its bundled, labelled simulation results with 6 baseline, 18 practice and 6 final trials. The macOS launcher is included for team testing.
+- Serial CSV preserves ADC counts. Each CSV and JSON download pair uses a frozen snapshot ID. The offline verifier reproduced 11,629 feature windows, 10,221 activity windows, 6,509 non-null classifier decisions and one held-out fit in a generated 30-trial run. Per-trial review, waveform excerpts, retakes in the original split and calibration-linked acquisition notes were checked by regression tests.
+- The original board firmware transmitted about 500 rows/s over COM3. A read-only check verified the application flash backup, and the disassembly showed A0 and AVCC selection. Two saved checks with that firmware contained 17,498 rows each. Counts near the 10-bit limits comprised 79.47% and 77.27%.
+- The counts-only Uno firmware passed a 20-second physical COM3 bench test at 1,999.8 samples/s. It delivered 39,920 ADC samples in 998 packets with zero missing or non-increasing sample indices. With electrodes off the wearer, 89.23% of counts were near the ADC limits. The original application was restored and verified byte for byte. Measured ADC reference, resolved clipping, hardware control and real labelled classifier outcomes remain open.
+- The ADC-count training firmware was installed on COM3 after backing up and verifying the original application. The new application was independently readback-verified. With electrodes off the wearer, it delivered 23,920 ADC samples at 1,999.9 samples/s, with zero missing or non-increasing indices. 24.52% were near ADC limits. The website supports relative calibration in counts with the voltage reference recorded as unknown. Wearer signal quality remains unverified on the new firmware.
+
+- The optional trial trace export verified 20,000 simulated raw samples and 201 feature windows for one trial, including 4,000 samples in its scored hold. Its PNG labels the simulation source and aligns raw waveform time, trial phases, target band and live scoring window endpoints.
+
 ## Current release checks
 
 - Fixed a mismatch between the majority class and the newest frame's confidence. Classification now requires the current prediction to agree with the three-frame majority and have a kNN vote fraction of at least 0.60. Uncertain windows export null label/confidence. RMS water control and trial scoring are unchanged.

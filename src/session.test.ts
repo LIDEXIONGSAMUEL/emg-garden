@@ -93,3 +93,29 @@ it('never confirms relaxation from poor or missing signal',()=>{
     expect(s.state).toBe('paused');expect(s.relaxed).toBe(false);
   }
 });
+it('replaces an excluded labelled trial in its original split only after a good retake',()=>{
+  const collection=new ExampleCollection(0);
+  for(let t=50;t<=180000;t+=50)collection.push(frame(t,.3));
+  expect(collection.state).toBe('complete');
+  const slot=12;
+  const original=collection.examples.filter(example=>example.trial==='trial-13');
+  collection.reviewTrial(slot,'excluded');
+  expect(collection.reviewReady).toBe(false);
+
+  collection.startRetake(slot,180000);
+  expect(collection.testing).toBe(true);
+  collection.interrupt('Disconnected during retake.');
+  expect(collection.state).toBe('complete');
+  expect(collection.examples.filter(example=>example.trial==='trial-13')).toEqual(original);
+  expect(collection.trialReviews[slot].decision).toBe('excluded');
+
+  collection.startRetake(slot,190000);
+  for(let t=190050;t<=200000;t+=50)collection.push(frame(t,.45));
+  const replaced=collection.examples.filter(example=>example.trial==='trial-13');
+  expect(replaced).toHaveLength(original.length);
+  expect(replaced[0].startIndex).toBeGreaterThan(original.at(-1)!.endIndex!);
+  expect(collection.examples.findIndex(example=>example.trial==='trial-13')).toBe(original.length*12);
+  expect(collection.trialReviews[slot]).toMatchObject({decision:'pending',attempt:2});
+  for(let trial=0;trial<18;trial++)collection.reviewTrial(trial,'accepted');
+  expect(collection.reviewReady).toBe(true);
+});

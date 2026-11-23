@@ -2,17 +2,30 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { createServer, request } from 'node:http'
-import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, rm, symlink, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 
 const script = fileURLToPath(new URL('./serve.mjs', import.meta.url))
 
 async function fixture(t) {
-  const root = await mkdtemp(join(tmpdir(), 'emg-server-'))
-  t.after(() => rm(root, { recursive: true, force: true }))
+  const temp = await realpath(tmpdir())
+  const root = await mkdtemp(join(temp, 'emg-server-'))
+  const children = new Set()
+  t.after(async () => {
+    // Stop processes using this directory as their cwd before removing it on Windows.
+    await Promise.all([...children].map(async child => {
+      if (child.pid && child.exitCode === null && child.signalCode === null) {
+        const exited = once(child, 'exit')
+        child.kill()
+        await exited
+      }
+    }))
+    assert.equal(dirname(root), temp)
+    await rm(root, { recursive: true, force: true, maxRetries: 3 })
+  })
   await mkdir(join(root, 'dist', 'assets'), { recursive: true })
   await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'emg-training-demo', version: '0.1.1' }))
   await writeFile(join(root, 'dist', 'index.html'), '<!doctype html><title>EMG Garden</title>')
@@ -21,7 +34,7 @@ async function fixture(t) {
   await writeFile(join(root, 'dist', 'README.md'), '# EMG Garden guide')
   await writeFile(join(root, 'secret.txt'), 'private')
   await symlink(join(root, 'secret.txt'), join(root, 'dist', 'escape.txt'))
-  return root
+  return { root, launch: port => run(root, port, children) }
 }
 
 async function freePort() {
@@ -33,17 +46,12 @@ async function freePort() {
   return port
 }
 
-function run(t, root, port) {
+function run(root, port, children) {
   const child = spawn(process.execPath, [script], { cwd: root, env: { ...process.env, PORT: String(port) } })
   let output = ''
   child.stdout.on('data', data => { output += data })
   child.stderr.on('data', data => { output += data })
-  t.after(async () => {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill()
-      await once(child, 'exit')
-    }
-  })
+  children.add(child)
   return { child, output: () => output }
 }
 
@@ -69,9 +77,9 @@ function http(port, path = '/', method = 'GET') {
 }
 
 test('serves built HTML and assets with MIME, HEAD and identity', async t => {
-  const root = await fixture(t)
+  const { launch } = await fixture(t)
   const port = await freePort()
-  await ready(run(t, root, port))
+  await ready(launch(port))
   const page = await http(port)
   assert.equal(page.status, 200)
   assert.match(page.headers['content-type'], /text\/html/)
@@ -93,9 +101,9 @@ test('serves built HTML and assets with MIME, HEAD and identity', async t => {
 })
 
 test('rejects missing files, unsafe paths, symlink escapes and unsupported methods', async t => {
-  const root = await fixture(t)
+  const { launch } = await fixture(t)
   const port = await freePort()
-  await ready(run(t, root, port))
+  await ready(launch(port))
   assert.equal((await http(port, '/missing')).status, 404)
   assert.equal((await http(port, '/assets/')).status, 404)
   assert.equal((await http(port, '/secret.txt')).status, 404)
@@ -108,9 +116,9 @@ test('rejects missing files, unsafe paths, symlink escapes and unsupported metho
 })
 
 test('serves the linked Markdown guide as readable plain text', async t => {
-  const root = await fixture(t)
+  const { launch } = await fixture(t)
   const port = await freePort()
-  await ready(run(t, root, port))
+  await ready(launch(port))
   const guide = await http(port, '/README.md')
   assert.equal(guide.status, 200)
   assert.equal(guide.headers['content-type'], 'text/plain; charset=utf-8')
@@ -118,10 +126,10 @@ test('serves the linked Markdown guide as readable plain text', async t => {
 })
 
 test('recognizes an existing instance only when application, version and build all match', async t => {
-  const root = await fixture(t)
+  const { root, launch } = await fixture(t)
   const port = await freePort()
-  await ready(run(t, root, port))
-  const duplicate = run(t, root, port)
+  await ready(launch(port))
+  const duplicate = launch(port)
   assert.equal((await once(duplicate.child, 'exit'))[0], 0, duplicate.output())
   assert.match(duplicate.output(), /same build/)
   for (const field of ['name', 'version', 'build']) {
@@ -130,7 +138,7 @@ test('recognizes an existing instance only when application, version and build a
     occupied.listen(0, '127.0.0.1')
     await once(occupied, 'listening')
     try {
-      const mismatch = run(t, root, occupied.address().port)
+      const mismatch = launch(occupied.address().port)
       assert.equal((await once(mismatch.child, 'exit'))[0], 1, field)
       assert.match(mismatch.output(), /different application or build/)
     } finally {
@@ -138,13 +146,13 @@ test('recognizes an existing instance only when application, version and build a
     }
   }
   await writeFile(join(root, 'dist', 'index.html'), '<!doctype html><title>New build</title>')
-  const changedBuild = run(t, root, port)
+  const changedBuild = launch(port)
   assert.equal((await once(changedBuild.child, 'exit'))[0], 1)
   assert.match(changedBuild.output(), /different application or build/)
 })
 
 test('rejects an occupied port that provides no valid application identity', async t => {
-  const root = await fixture(t)
+  const { launch } = await fixture(t)
   for (const mode of ['html', 'unresponsive']) {
     const occupied = createServer((req, res) => {
       if (mode === 'html') res.end('<html>another application</html>')
@@ -152,7 +160,7 @@ test('rejects an occupied port that provides no valid application identity', asy
     occupied.listen(0, '127.0.0.1')
     await once(occupied, 'listening')
     try {
-      const other = run(t, root, occupied.address().port)
+      const other = launch(occupied.address().port)
       assert.equal((await once(other.child, 'exit'))[0], 1)
       assert.match(other.output(), /different application or build/)
     } finally {
@@ -163,12 +171,12 @@ test('rejects an occupied port that provides no valid application identity', asy
 })
 
 test('fails clearly for invalid ports and absent production builds', async t => {
-  const root = await fixture(t)
-  const invalid = run(t, root, 'not-a-port')
+  const { root, launch } = await fixture(t)
+  const invalid = launch('not-a-port')
   assert.equal((await once(invalid.child, 'exit'))[0], 1)
   assert.match(invalid.output(), /PORT/)
   await rm(join(root, 'dist'), { recursive: true })
-  const missing = run(t, root, await freePort())
+  const missing = launch(await freePort())
   assert.equal((await once(missing.child, 'exit'))[0], 1)
   assert.match(missing.output(), /npm run build/)
 })
