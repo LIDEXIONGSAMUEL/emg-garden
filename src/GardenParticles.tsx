@@ -40,7 +40,7 @@ export function GardenParticles({enabled,flow,rewarded,protectMeter}:Props){
     if(!ctx)return;
     const motion=window.matchMedia('(prefers-reduced-motion: reduce)');
     const trail:Point[]=[], sparks:Spark[]=[];
-    let frame=0, lastFrame=0, rewardTime=-Infinity, flowing=0, wasRewarded=false, meter=false;
+    let frame=0, lastFrame=0, rewardTime=-Infinity, flowing=0, targetFlow=0, wasRewarded=false, meter=false;
     let scaleX=1, scaleY=1;
     let needsClear=false, continuesStroke=false;
 
@@ -71,6 +71,7 @@ export function GardenParticles({enabled,flow,rewarded,protectMeter}:Props){
       continuesStroke=false;
       sparks.length=0;
       rewardTime=-Infinity;
+      flowing=0;
       clear();
     }
 
@@ -142,7 +143,7 @@ export function GardenParticles({enabled,flow,rewarded,protectMeter}:Props){
         const t=(now/620+i/count)%1, u=1-t;
         const x=u*u*250+2*u*t*(272+(i%3-1)*8)+t*t*(300+(i%5-2)*5);
         const y=u*u*238+2*u*t*236+t*t*278;
-        const opacity=Math.sin(Math.PI*t)*Math.min(.9,.29+flowing);
+        const opacity=Math.sin(Math.PI*t)*Math.min(.9,.29+flowing)*Math.min(1,flowing/.1);
         context.globalAlpha=opacity;
         context.fillStyle=i%3===0?'#e5fff4':'#72e8f1';
         context.beginPath();
@@ -179,6 +180,9 @@ export function GardenParticles({enabled,flow,rewarded,protectMeter}:Props){
       clear();
       const dt=lastFrame?Math.min(.035,(now-lastFrame)/1000):1/60;
       lastFrame=now;
+      // Follow the same short visual transition as the SVG water.
+      const flowDelta=targetFlow-flowing;
+      flowing=Math.abs(flowDelta)<.007?targetFlow:flowing+flowDelta*(1-Math.exp(-dt/.055));
       context.setTransform(scaleX,0,0,scaleY,0,0);
       context.save();
       if(meter){
@@ -206,18 +210,18 @@ export function GardenParticles({enabled,flow,rewarded,protectMeter}:Props){
 
     function motionChanged(){
       if(motion.matches)stop();
-      else if(flowing>0)wake();
+      else if(targetFlow>0)wake();
     }
 
     applyEffects.current=effects=>{
-      flowing=effects.flow;
+      targetFlow=effects.flow;
       meter=effects.protectMeter;
       if(effects.rewarded&&!wasRewarded&&!motion.matches){
         rewardTime=performance.now();
         scatter(FLOWER.x,FLOWER.y,68,true);
       }
       wasRewarded=effects.rewarded;
-      if(flowing>0||sparks.length)wake();
+      if(targetFlow>0||sparks.length)wake();
     };
     const observer=new ResizeObserver(resize);
     resize();

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { createServer, request } from 'node:http'
-import { mkdtemp, mkdir, writeFile, rm, symlink, realpath } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, rm, symlink, realpath, readFile, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -113,6 +113,35 @@ test('rejects missing files, unsafe paths, symlink escapes and unsupported metho
   const post = await http(port, '/', 'POST')
   assert.equal(post.status, 405)
   assert.equal(post.headers.allow, 'GET, HEAD')
+})
+
+
+test('saves serial playtest checkpoints only for the local page', async t => {
+  const { root, launch } = await fixture(t)
+  const port = await freePort()
+  await ready(launch(port))
+  const origin = 'http://127.0.0.1:' + port
+  const path = '/api/playtest-checkpoint'
+  const id = '11111111-1111-4111-8111-111111111111'
+  const checkpoint = { schema:'emg-garden-playtest/1', id, sequence:0,
+    source:'serial', samples:[[0,512,null]], windows:[], events:[] }
+  function post(body, requestOrigin = origin) {
+    return fetch(origin + path, { method:'POST', headers:{
+      Origin:requestOrigin, 'Content-Type':'application/json',
+    }, body:JSON.stringify(body) })
+  }
+
+  assert.equal((await post(checkpoint, 'https://example.com')).status, 403)
+  assert.equal((await post({...checkpoint, id:'../secret.txt'})).status, 400)
+  assert.equal((await post({...checkpoint, source:'replay'})).status, 400)
+  assert.equal((await post({...checkpoint, samples:Array.from({length:4001},()=>[0,512,null])})).status, 400)
+  assert.equal((await post(checkpoint)).status, 204)
+  assert.equal((await post(checkpoint)).status, 204)
+  assert.equal((await post({...checkpoint, sequence:1, samples:[[1,513,null]]})).status, 204)
+  const folder = join(root, 'recordings', 'playtests', id)
+  assert.deepEqual(JSON.parse(await readFile(join(folder, '000000.json'), 'utf8')), checkpoint)
+  assert.deepEqual(await readdir(folder), ['000000.json', '000001.json'])
+  assert.equal((await http(port, '/recordings/playtests/' + id + '/000000.json')).status, 404)
 })
 
 test('serves the linked Markdown guide as readable plain text', async t => {

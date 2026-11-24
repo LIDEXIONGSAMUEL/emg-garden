@@ -6,11 +6,14 @@ type GardenProps = {
   target?: number;
   showEffort?: boolean;
   showTarget?: boolean;
+  showWater?: boolean;
   resting?: boolean;
   rewarded?: boolean;
   preview?: boolean;
   effects?: boolean;
   daylight?: boolean;
+  confirmTarget?: boolean;
+  targetPulse?: number|null;
 };
 
 const stars = [[64,83],[108,57],[156,115],[218,56],[258,114],[361,50],[422,94],[469,47],[549,66],[597,111]];
@@ -23,17 +26,16 @@ function activityDisplayLevel(level:number){
   return activity<=1 ? activity*.8 : 1-.2/activity;
 }
 
-export function Garden({level=0,target=.3,showEffort=false,showTarget=false,resting=false,rewarded=false,preview=false,effects=false,daylight=false}:GardenProps){
+export function Garden({level=0,target=.3,showEffort=false,showTarget=false,showWater=showEffort,resting=false,rewarded=false,preview=false,effects=false,daylight=false,confirmTarget=false,targetPulse=null}:GardenProps){
   const id=useId();
   const paint=(name:string)=>`url(#${id}-${name})`;
   const water=activityDisplayLevel(level);
-  const activityPercent=Math.round(Math.max(0,level)*100);
   const inZone=showTarget&&Math.abs(level-target)<=.1;
-  const flowing=showEffort&&!resting&&level>.025;
+  const flow=showWater&&!resting&&level>.025?water:0;
+  const flowing=flow>0;
   const meterY=(value:number)=>252-144*activityDisplayLevel(value);
-  const description=showEffort
-    ? `Effort ${activityPercent} percent of your comfortable reference.${showTarget?` Target ${Math.round((target-.1)*100)} to ${Math.round((target+.1)*100)} percent.`:''}`
-    : 'Illustrated garden with a flower and watering can.';
+  const description=inZone?'Garden with water flowing and the flowerpot glowing.':
+    flowing?'Garden with water flowing onto the flowerpot.':'Illustrated garden with a flower and watering can.';
 
   return <div className="garden-visual">
     <svg className="garden-scene" viewBox="0 0 640 382" data-preview={preview||undefined}
@@ -143,6 +145,7 @@ export function Garden({level=0,target=.3,showEffort=false,showTarget=false,rest
       </g>
 
       <ellipse cx="337" cy="347" rx="119" ry="13" fill="#0f2430" opacity=".58"/>
+      <ellipse className="garden-pot-glow" cx="335" cy="341" rx="70" ry="12" fill="none" stroke="#b8f9cb" strokeWidth="3" aria-hidden="true"/>
       <ellipse className="garden-ripple" cx="335" cy="345" rx="64" ry="11" fill="none" stroke="#a7e3b9" strokeWidth="2"/>
       <g className="garden-plant">
         <path d="M335 294Q347 251 333 209Q328 186 335 153" fill="none" stroke="#6eb590" strokeWidth="9" strokeLinecap="round"/>
@@ -155,10 +158,14 @@ export function Garden({level=0,target=.3,showEffort=false,showTarget=false,rest
           <path d="M328 145h.1m9-4h.1m9 10h.1m-14 5h.1m8 8h.1m-17-2h.1" fill="none" stroke="#f1bd88" strokeWidth="3" strokeLinecap="round"/>
         </g>
       </g>
-      <path d="M281 278h111l-16 57q-2 8-11 8h-57q-9 0-11-8Z" fill={paint('pot')}/>
-      <path d="M296 300h81m-77 13h72m-69 13h66" stroke="#ffc9aa" strokeWidth="1.3" opacity=".47"/>
-      <rect x="274" y="275" width="125" height="17" rx="7" fill="#f4b29b"/>
-      <path d="M285 280h102" stroke="#ffdac2" strokeWidth="1.5" strokeLinecap="round" opacity=".75"/>
+      <g className="garden-pot" key={'pot-'+targetPulse} data-pop={targetPulse!==null||undefined}>
+        <path d="M281 278h111l-16 57q-2 8-11 8h-57q-9 0-11-8Z" fill={paint('pot')}/>
+        <path d="M296 300h81m-77 13h72m-69 13h66" stroke="#ffc9aa" strokeWidth="1.3" opacity=".47"/>
+        <rect x="274" y="275" width="125" height="17" rx="7" fill="#f4b29b"/>
+        <path d="M285 280h102" stroke="#ffdac2" strokeWidth="1.5" strokeLinecap="round" opacity=".75"/>
+        {confirmTarget&&<rect className="garden-pot-rim" x="274" y="275" width="125" height="17" rx="7"
+          fill="none" stroke="#bbffdc" strokeWidth="4" aria-hidden="true"/>}
+      </g>
 
       <g className="garden-can" data-flowing={flowing||undefined}>
         <path d="M119 186q-41-33-60 1-13 35 47 38" fill="none" stroke="#488b96" strokeWidth="10" strokeLinecap="round"/>
@@ -170,10 +177,19 @@ export function Garden({level=0,target=.3,showEffort=false,showTarget=false,rest
         <path d="M140 208q-10-2-10-9 6 1 10 9m0 0q0-12 9-15 1 9-9 15m0 0v5" fill="none" stroke="#284b59" strokeWidth="1.9" strokeLinecap="round" opacity=".82"/>
       </g>
 
-      {flowing&&<g className="garden-stream" aria-hidden="true">
+      {showWater&&<g className="garden-stream" opacity={flowing?(inZone?1:.77):0} aria-hidden="true">
         <path d="M249 237Q276 236 301 281M247 239Q273 246 285 279M252 235Q289 230 312 278" fill="none" stroke="#b3f9f4" strokeWidth="1.25" opacity=".32"/>
-        <path className="garden-water-drops" d="M250 238Q277 239 300 278" fill="none" stroke={paint('water')} strokeWidth={2+water*9} strokeDasharray="2 10" strokeLinecap="round"/>
+        <path className="garden-water-drops" d="M250 238Q277 239 300 278" fill="none" stroke={paint('water')} strokeWidth={flowing?2+flow*9:0} strokeDasharray="2 10" strokeLinecap="round"/>
         <path className="garden-water-splash" d="M290 277l-5-9m10 8v-13m6 13 6-11m-3 13 9-5" fill="none" stroke="#d4fff2" strokeWidth="1.7" strokeLinecap="round"/>
+      </g>}
+
+      {targetPulse!==null&&<g key={'hit-'+targetPulse} className="garden-target-hit" transform="translate(307 278)" aria-hidden="true">
+        <ellipse className="garden-hit-ripple" rx="20" ry="6" fill="none" stroke="#d2fff0" strokeWidth="3"/>
+        <g className="garden-hit-drop">
+          <path d="M0-23C-4-14-10-10-10-5a10 10 0 0 0 20 0C10-10 4-14 0-23Z"
+            fill="#8af3ec" stroke="#edfff9" strokeWidth="2"/>
+          <path d="M-5-8q0 4 3 5" stroke="#edfff9" strokeWidth="2" strokeLinecap="round" fill="none"/>
+        </g>
       </g>}
 
       {rewarded&&<g className="garden-celebration" aria-hidden="true">
@@ -187,13 +203,12 @@ export function Garden({level=0,target=.3,showEffort=false,showTarget=false,rest
         {showTarget&&<>
           <rect className="garden-target" x="516" y={meterY(target+.1)} width="32" height={meterY(target-.1)-meterY(target+.1)} rx="5"/>
           <path d={`M512 ${meterY(target+.1)}h41m-41 ${meterY(target-.1)}h41`} fill="none" stroke="#a4edc6" strokeWidth="1.2" strokeDasharray="3 3"/>
-          <text x="554" y={meterY(target)+4} className="garden-target-label">Target</text>
+          <text x="554" y={meterY(target)+4} className="garden-target-label">Aim here</text>
         </>}
         <g clipPath={paint('meter')}><rect className="garden-meter-fill" x="525" y={meterY(level)} width="14" height={144*water} rx="7" fill={paint('water')}/></g>
-        <text x="537" y="269" textAnchor="middle" className="garden-meter-value">{activityPercent}%</text>
       </g>}
     </svg>
-    <GardenParticles enabled={preview||effects} flow={flowing?water:0} rewarded={rewarded} protectMeter={showEffort}/>
+    <GardenParticles enabled={preview||effects} flow={flow} rewarded={rewarded} protectMeter={showEffort}/>
     {preview&&<span className="garden-interaction-hint">Move across the garden</span>}
   </div>;
 }

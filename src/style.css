@@ -368,7 +368,6 @@ header {
   background: #eaf1ee;
 }
 
-.mobile-effort { display: none; }
 [data-stage="paused"] .garden-stars, [data-stage="paused"] .garden-sky-orbit { animation-play-state: paused; }
 .garden-visual { position: relative; overflow: hidden; isolation: isolate; touch-action: pan-y pinch-zoom; }
 .garden-scene { display: block; width: 100%; height: auto; --sunrise-duration: 2.85s; --sunrise-delay: 0s; }
@@ -429,25 +428,56 @@ header {
   transform: scale(1.09);
   animation: bloom-reward .85s cubic-bezier(.2,.7,.35,1) both;
 }
+.garden-pot-glow { opacity: 0; filter: drop-shadow(0 0 8px #8dffd5); transition: opacity .18s ease; }
+[data-in-zone] .garden-pot-glow { opacity: .92; }
+.garden-pot { transform-origin: 336px 315px; }
+.garden-pot[data-pop] { animation: pot-hit 450ms ease-out both; }
+.garden-pot-rim { opacity: 0; transition: opacity .12s ease-out; }
+[data-in-zone] .garden-pot-rim {
+  opacity: 1;
+  filter: drop-shadow(0 0 5px #8fffd6);
+  transition-duration: 0s;
+}
+.garden-hit-drop { animation: target-drop 450ms ease-in both; }
+.garden-hit-ripple { animation: target-ripple 450ms ease-out both; }
+.garden-audio-options { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 14px; }
+@keyframes pot-hit {
+  0%, 33%, 100% { transform: none; }
+  52% { transform: translateY(4px) scale(1.045,.95); }
+  75% { transform: translateY(-3px) scale(.98,1.035); }
+}
+@keyframes target-drop {
+  0% { transform: translate(-22px,-28px) scale(.75); opacity: 1; }
+  40% { transform: translate(0,0); opacity: 1; }
+  52%, 100% { opacity: 0; }
+}
+@keyframes target-ripple {
+  0%, 37% { transform: scale(.5); opacity: 0; }
+  48% { opacity: 1; }
+  100% { transform: scale(2.5,1.5); opacity: 0; }
+}
 .garden-ripple { opacity: 0; transform-origin: 335px 345px; }
 [data-rewarded] .garden-ripple { animation: reward-ripple 1.1s ease-out both; }
 .garden-can { transform-origin: 139px 208px; transition: transform .33s ease; }
 .garden-can[data-flowing] { transform: rotate(4deg) translateY(2px); }
-.garden-stream { opacity: .77; animation: water-in .2s ease-out both; }
-[data-in-zone] .garden-stream { opacity: 1; }
-.garden-water-drops { animation: pour .6s linear infinite; }
+.garden-scene { --feedback-transition: 120ms ease-out; }
+.garden-stream { transition: opacity var(--feedback-transition); }
+.garden-water-drops {
+  animation: pour .6s linear infinite;
+  transition: stroke-width var(--feedback-transition);
+}
+.garden-meter-fill { transition: y var(--feedback-transition), height var(--feedback-transition); }
 .garden-water-splash { animation: splash .65s ease-in-out infinite alternate; transform-origin: 297px 278px; }
 .garden-celebration { transform-origin: 335px 153px; animation: sparks 1.13s cubic-bezier(.16,.65,.35,1) both; }
 .garden-target { fill: #7eddac; fill-opacity: .22; transition: fill-opacity .2s ease; }
 [data-in-zone] .garden-target { fill-opacity: .65; }
-.garden-meter-label, .garden-target-label, .garden-meter-value {
+.garden-meter-label, .garden-target-label {
   font-family: "Segoe UI", system-ui, sans-serif;
   font-weight: 650;
   fill: #e3f4e9;
 }
 .garden-meter-label { font-size: 10px; letter-spacing: 1.25px; }
 .garden-target-label { font-size: 11px; }
-.garden-meter-value { font-size: 12px; font-variant-numeric: tabular-nums; }
 
 .instruction {
   --cue-ink: #1d6552;
@@ -604,7 +634,6 @@ footer { padding: 14px 0 26px; text-align: center; color: var(--muted); font-siz
 @keyframes bloom-reward { 0% { transform: scale(1); } 45% { transform: scale(1.21) rotate(-5deg); } 100% { transform: scale(1.09); } }
 @keyframes reward-ripple { from { opacity: .76; transform: scale(.4); } to { opacity: 0; transform: scale(1.75); } }
 @keyframes sparks { 0% { opacity: 0; transform: scale(.42) rotate(-8deg); } 20% { opacity: 1; } 100% { opacity: 0; transform: scale(1.62) rotate(13deg); } }
-@keyframes water-in { from { opacity: 0; } }
 @keyframes pour { to { stroke-dashoffset: -36; } }
 @keyframes splash { from { opacity: .45; transform: scale(.7); } to { opacity: .9; transform: scale(1.05); } }
 @keyframes cue-in { from { opacity: .6; transform: translateY(5px) scale(.94); } to { opacity: 1; transform: none; } }
@@ -641,8 +670,7 @@ footer { padding: 14px 0 26px; text-align: center; color: var(--muted); font-siz
   .instruction h1 { margin-top: 8px; }
   .countdown { width: 64px; height: 64px; font-size: 22px; }
   .panel-heading { padding: 9px 11px; font-size: 12px; }
-  .mobile-effort { display: block; width: 100%; font-size: 13px; font-weight: 650; }
-  .garden-meter-label, .garden-target-label, .garden-meter-value { display: none; }
+  .garden-meter-label, .garden-target-label { display: none; }
   .garden-caption { padding: 9px 11px; min-height: 45px; font-size: 14px; }
   .source-banner { padding: 9px 11px; font-size: 13px; }
   .session-progress { gap: 10px; font-size: 12px; }
@@ -650,6 +678,7 @@ footer { padding: 14px 0 26px; text-align: center; color: var(--muted); font-siz
   th, td { font-size: 12px; padding: 8px 6px; }
 }
 @media (prefers-reduced-motion: reduce) {
+  .garden-target-hit { display: none; }
   .garden-particles, .garden-interaction-hint { display: none; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
   button:hover:not(:disabled), button:active:not(:disabled) { transform: none; }

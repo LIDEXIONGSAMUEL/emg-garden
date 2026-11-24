@@ -1,5 +1,7 @@
 import {activity,measureCalibration,minimumReference,mean,median,sd,type Frame,type Calibration} from './signal';
 import type {Example} from './model';
+export const LIGHT_TRAINING_TARGET=.3;
+
 type State='ready'|'running'|'paused'|'complete'|'stopped';
 export type TrialResult={trial:number;block:'baseline'|'practice'|'final';round:number;target:number;tolerance:number;error:number|null;inZone:number|null;variation:number|null;coverage:number;restCoverage:number;residual:number|null;relaxationMs:number|null;rewarded:boolean;interrupted:boolean;valid:boolean;contractStartMs?:number;holdStartMs?:number;holdEndMs?:number;restStartMs?:number;endMs?:number};
 export class TrainingSession {
@@ -8,7 +10,7 @@ export class TrainingSession {
   private previous:Frame|null=null;private pausedAt=0;private values:number[]=[];private weights:number[]=[];
   private rest:number[]=[];private restMs=0;private pending:TrialResult|null=null;private relaxAt:number|null=null;private relaxationMs:number|null=null;private interrupted=false;private contractStart=0;
   constructor(public calibration:Calibration){}
-  get target(){return this.trial%2===0?.3:.6;}
+  get target(){return this.trial%2===0?LIGHT_TRAINING_TARGET:.6;}
   get remaining(){return Math.max(0,((this.phase==='familiar'?30000:5000)-(this.lastTime-this.phaseAt))/1000);}
   get block(){return this.trial<6?'baseline':this.trial<24?'practice':'final';}
   get round(){return this.trial<6||this.trial>=24?1:Math.floor((this.trial-6)/6)+1;}
@@ -69,6 +71,10 @@ export class CalibrationRun {
     this.durations=CALIBRATION_DURATIONS[protocol];
     this.contractionCount=protocol==='quick'?1:3;
     this.contractions=Array.from({length:this.contractionCount},()=>[]);
+  }
+  detectsSqueeze(rms:number){
+    if(!this.rest.length)return false;
+    return rms>minimumReference(measureCalibration(this.rest,[[rms]],1));
   }
   get totalMs(){return this.durations.reduce((total,phase)=>total+phase,0);}
   get instruction(){return this.step%2===1?'contract':'rest';}

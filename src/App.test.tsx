@@ -42,6 +42,7 @@ async function reopenApp(){
 beforeEach(async()=>{
   localStorage.clear();
   vi.useFakeTimers();vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);
+  vi.stubGlobal('fetch',vi.fn(async()=>({ok:false})));
   vi.stubGlobal('URL',{createObjectURL:vi.fn(()=>'blob:test'),revokeObjectURL:vi.fn()});
   downloads=[];vi.spyOn(HTMLAnchorElement.prototype,'click').mockImplementation(function(this:HTMLAnchorElement){downloads.push(this.download);});
   container=document.createElement('div');document.body.appendChild(container);root=createRoot(container);
@@ -56,9 +57,12 @@ it('saves a completed reference before any training and restores it after reopen
   await act(async()=>{button('Set my reference').click();});
   expect(container.querySelector('.countdown')?.getAttribute('aria-label')).toBe('5 seconds remaining');
   await act(async()=>{feedSignal(5000);});
-  expect(container.querySelector('.instruction h1')?.textContent).toBe('Gently squeeze');
+  expect(container.querySelector('.instruction h1')?.textContent).toBe('Squeeze comfortably');
   expect(container.querySelector('.countdown')?.getAttribute('aria-label')).toBe('5 seconds remaining');
-  await act(async()=>{feedSignal(5000,1);});
+  expect(container.querySelector('.garden-stream')?.getAttribute('opacity')).toBe('0');
+  await act(async()=>{feedSignal(1000,1);});
+  expect(Number(container.querySelector('.garden-stream')?.getAttribute('opacity'))).toBeGreaterThan(0);
+  await act(async()=>{feedSignal(4000,1);});
   expect(container.textContent).toContain('Reference saved on this browser');
   expect(loadResults()).toHaveLength(0);
   await reopenApp();
@@ -282,12 +286,76 @@ it('shows consistent hand illustrations for relax, squeeze and steady instructio
   expect(container.querySelector('.instruction h1')?.textContent).toBe('Relax your hand');
   await act(async()=>{feedSignal(5000);});
   expect(container.querySelector('[data-hand-action="squeeze"] svg')).not.toBeNull();
-  expect(container.querySelector('.instruction h1')?.textContent).toBe('Gently squeeze');
+  expect(container.querySelector('.instruction h1')?.textContent).toBe('Squeeze comfortably');
   await act(async()=>{completeReference(1);});
-  await act(async()=>{button('Start training').click();feedSignal(31000,.3);});
+  await act(async()=>{button('Start training').click();feedSignal(30000,0);});
+  const cue=()=>container.querySelector('.instruction h1')?.textContent;
+  const garden=()=>container.querySelector('.garden-panel');
+  expect(cue()).toBe('Squeeze a little more');
+  expect(container.querySelector('.instruction')?.textContent).toContain('Light squeeze');
+  expect(garden()?.textContent).not.toMatch(/\d+%/);
+  expect(garden()?.querySelector('svg')?.getAttribute('aria-label')).not.toMatch(/percent/i);
+  expect(garden()?.querySelector('[data-in-zone]')).toBeNull();
+  await act(async()=>{feedSignal(1000,.3);});
+  expect(cue()).toBe('That’s it! Hold it');
   expect(container.querySelector('[data-hand-action="hold"] svg')).not.toBeNull();
-  expect(container.querySelector('.instruction h1')?.textContent).toBe('Keep steady');
+  expect(garden()?.querySelector('[data-in-zone]')).not.toBeNull();
+  expect(garden()?.querySelector('.reward-note')).toBeNull();
+  await act(async()=>{feedSignal(1600,.3);});
+  expect(garden()?.querySelector('.reward-note')?.textContent).toBe('Flower watered!');
+  await act(async()=>{feedSignal(1000,.9);});
+  expect(cue()).toBe('Ease off a little');
+  expect(garden()?.querySelector('[data-in-zone]')).toBeNull();
+  await act(async()=>{feedSignal(6500,0);});
+  expect(container.querySelector('.instruction')?.textContent).toContain('Firmer squeeze');
 });
+it('plays target feedback once per armed entry and logs the qualified sample',async()=>{
+  const exported:string[]=[];
+  vi.stubGlobal('Blob',class {constructor(parts:string[]){exported.push(parts.join(''));}});
+  await startRecording();
+  await act(async()=>{button('Set my reference').click();completeReference();});
+  const splash=()=>container.querySelector('.garden-target-hit');
+  expect(splash()).toBeNull();
+  await act(async()=>{button('Start training').click();feedSignal(29000,.3);});
+  expect(splash()).toBeNull();
+  await act(async()=>{feedSignal(1000,0);});
+  await act(async()=>{feedSignal(500,.3);});
+  const first=splash();
+  expect(first).not.toBeNull();
+  expect(container.querySelector('.garden-pot-rim')).not.toBeNull();
+  expect(container.querySelector('.reward-note')).toBeNull();
+
+  await act(async()=>{feedSignal(200,.59);});
+  expect(container.querySelector('[data-in-zone]')).toBeNull();
+  await act(async()=>{feedSignal(250,.3);});
+  expect(container.querySelector('[data-in-zone]')).not.toBeNull();
+  expect(splash()).toBe(first);
+  await act(async()=>{feedSignal(600,0);});
+  await act(async()=>{feedSignal(500,.3);});
+  expect(splash()).not.toBeNull();
+  expect(splash()).not.toBe(first);
+
+  await act(async()=>{vi.advanceTimersByTime(450);});
+  expect(splash()).toBeNull();
+  expect(container.querySelector('[data-in-zone]')).not.toBeNull();
+  await act(async()=>{feedSignal(2050,.3);});
+  expect(container.querySelector('.reward-note')?.textContent).toBe('Flower watered!');
+  await act(async()=>{button('End session').click();});
+  await act(async()=>{button('Download session JSON').click();});
+  const {events}=JSON.parse(exported[0]) as ReturnType<import('./engine').Engine['export']>;
+  const hits=events.filter(event=>event.event==='target_hit_feedback');
+  expect(hits).toHaveLength(2);
+  for(const hit of hits){
+    const detail=hit.detail as {activity:number;sampleIndex:number;signalTime:number;wallTime:string};
+    expect(detail).toMatchObject({trial:1,block:'baseline',target:.3});
+    expect(detail.activity).toBeGreaterThanOrEqual(.2);
+    expect(detail.activity).toBeLessThanOrEqual(.4);
+    expect(detail.sampleIndex).toBeGreaterThan(0);
+    expect(detail.signalTime).toBe(hit.time);
+    expect(Number.isFinite(Date.parse(detail.wallTime))).toBe(true);
+  }
+});
+
 it('confirms observed relaxation only during fresh running training rest',async()=>{
   await startRecording();
   await act(async()=>{button('Set my reference').click();completeReference();});
@@ -327,6 +395,8 @@ it('keeps serial training paused after a stall until fresh samples arrive and Co
   expect(container.querySelector('.instruction h1')?.textContent).toBe('Take a break');
   expect(button('Continue').disabled).toBe(true);
   expect(container.querySelector('.tools-grid dl')?.textContent).toContain('Waiting for signal');
+  expect(container.querySelector('.garden-pot-rim')).toBeNull();
+  expect(container.querySelector('.garden-target-hit')).toBeNull();
   expect(container.textContent).toContain('0 of 30 trials completed');
   await act(async()=>{signal.index+=1000;feedSignal(700,.3);});
   expect(container.querySelector('.instruction h1')?.textContent).toBe('Take a break');
@@ -368,22 +438,70 @@ it('previews gentle and stronger live activity after calibration without startin
   await startRecording();
   await act(async()=>{button('Set my reference').click();completeReference();});
   const width=()=>Number(container.querySelector('.garden-water-drops')?.getAttribute('stroke-width'));
-  const level=()=>Number(container.querySelector('.garden-meter-value')?.textContent?.replace('%',''));
+  const meterHeight=()=>Number(container.querySelector('.garden-meter-fill')?.getAttribute('height'));
+  const level=()=>Number(container.querySelector('.tools-grid dl div:last-child dd')?.textContent?.replace('%',''));
   await act(async()=>{feedSignal(1800);});
-  expect(container.querySelector('.garden-water-drops')).toBeNull();
+  const opacity=()=>container.querySelector('.garden-stream')?.getAttribute('opacity');
+  expect(opacity()).toBe('0');
+  expect(width()).toBe(0);
   await act(async()=>{feedSignal(1300,.35);});
-  const lightWidth=width(),light=level();
+  expect(Number(opacity())).toBeGreaterThan(0);
+  const lightWidth=width(),light=meterHeight();
   expect(lightWidth).toBeGreaterThan(0);
   await act(async()=>{feedSignal(1300,.7);});
   expect(width()).toBeGreaterThan(lightWidth);
-  expect(level()).toBeGreaterThan(light);
+  expect(meterHeight()).toBeGreaterThan(light);
+  expect(container.querySelector('.garden-panel')?.textContent).not.toMatch(/\d+%/);
   await act(async()=>{feedSignal(1300,1.2);});
   const aboveReferenceWidth=width();
   expect(level()).toBeGreaterThan(100);
   await act(async()=>{feedSignal(1300,1.5);});
   expect(width()).toBeGreaterThan(aboveReferenceWidth);
+  await act(async()=>{feedSignal(1800);});
+  expect(opacity()).toBe('0');
+  expect(width()).toBe(0);
   expect(button('Start training').disabled).toBe(false);
   expect(loadResults()).toHaveLength(0);
+});
+
+
+it('automatically saves live playtest checkpoints and retries the same data before advancing',async()=>{
+  const post=vi.fn()
+    .mockResolvedValueOnce({ok:false})
+    .mockResolvedValue({ok:true});
+  vi.stubGlobal('fetch',post);
+  await startRecording();
+  await act(async()=>{vi.advanceTimersByTime(2000);});
+  expect(post).toHaveBeenCalledTimes(1);
+  expect(container.textContent).toContain('Could not save a local checkpoint');
+  await act(async()=>{feedSignal(600);});
+  await act(async()=>{vi.advanceTimersByTime(2000);});
+  expect(post.mock.calls[1][1].body).toBe(post.mock.calls[0][1].body);
+  const batches=()=>post.mock.calls.slice(1).map(([url,options])=>{
+    expect(url).toBe('/api/playtest-checkpoint');
+    return JSON.parse(options.body);
+  });
+  const savedIndices=batches().flatMap(batch=>batch.samples.map(([index]:[number])=>index));
+  expect(savedIndices).toHaveLength(4200);
+  expect(savedIndices.every((index,position)=>index===position)).toBe(true);
+  expect(container.textContent).toContain('Saved locally');
+  await act(async()=>{feedSignal(600);});
+  await act(async()=>{button('Set my reference').click();completeReference();});
+  await act(async()=>{button('Start training').click();feedSignal(33000,.3);});
+  await act(async()=>{button('End session').click();});
+  const saved=batches(),last=saved.at(-1);
+  expect(last.sessionState).toBe('stopped');
+  expect(last.sessions).toHaveLength(1);
+  expect(saved.every(batch=>batch.id===last.id&&batch.source==='serial')).toBe(true);
+  expect(saved.flatMap(batch=>batch.windows).some(window=>window.activity>.2)).toBe(true);
+  expect(saved.flatMap(batch=>batch.events)).toEqual(expect.arrayContaining([
+    expect.objectContaining({event:'training_started'}),
+    expect.objectContaining({event:'reward'}),
+    expect.objectContaining({event:'training_ended'}),
+    expect.objectContaining({event:'target_hit_feedback',detail:expect.objectContaining({trial:1,target:.3})}),
+    expect.objectContaining({event:'player_cue',detail:expect.objectContaining({title:'Session ended'})}),
+  ]));
+  expect(downloads).toHaveLength(0);
 });
 
 it('shows labelled session metrics during training and valid before-and-after comparisons at the end',async()=>{

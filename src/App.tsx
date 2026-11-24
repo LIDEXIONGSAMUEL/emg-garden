@@ -2,11 +2,13 @@ import {Fragment,useEffect,useRef,useState} from 'react';
 import {Engine,type AcquisitionSetup} from './engine';
 import {Processor,parseRecordingCsv,mean,minimumReference,MAX_CSV_BYTES,type Sample,type AmplitudeUnit} from './signal';
 import {captureRecording} from './recording';
+import {PlaytestLog} from './playtestLog';
 import {connectBoardSerial,connectSerial,selectSerialPort,DEFAULT_EMG_BAUD,UNO_EMG_BAUD,type EmgBaudRate} from './serial';
-import type {TrainingSession,TrialResult,TrialReviewDecision} from './session';
+import {LIGHT_TRAINING_TARGET,type TrainingSession,type TrialResult,type TrialReviewDecision} from './session';
 import {parseResultFile,loadResults,saveResults,deleteResult,loadReference,saveReference,matchesReference,type SavedResult} from './records';
 import {HandCue,StageIcon,type HandAction} from './HandCue';
 import {Garden} from './Garden';
+import {useTargetFeedback} from './targetFeedback';
 import {DemoDashboard} from './DemoDashboard';
 import {BoardMonitor} from './BoardMonitor';
 import {TrialWaveform} from './TrialWaveform';
@@ -43,6 +45,7 @@ function Results({results,simulated}:{results:TrialResult[];simulated:boolean}){
 export default function App(){
   const engine=useRef<Engine|null>(null),replay=useRef<Sample[]>([]),replayIndex=useRef(0);
   const board=useRef<BoardReading|null>(null);
+  const playtest=useRef<PlaytestLog|null>(null);
   const pendingExport=useRef<{engine:Engine;format:'session'|'raw';pair:ReturnType<typeof captureRecording>}|null>(null);
   const transport=useRef<{stop:()=>Promise<void>}|null>(null),generation=useRef(0),lastReceived=useRef(0);
   const alive=useRef(true),running=useRef(false);
@@ -59,9 +62,11 @@ export default function App(){
   useEffect(()=>{try{setSaved(loadResults());}catch(ex){setSaveError((ex as Error).message);}},[]);
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;running.current=false;generation.current++;void transport.current?.stop();};},[]);
   const refresh=()=>{if(alive.current)render(v=>v+1);};
+  const saveCheckpoint=()=>{void playtest.current?.checkpoint().then(refresh);};
   const handleError=(message:string)=>{
     startDeadline.current=null;
     engine.current?.interrupt(message);
+    saveCheckpoint();
     running.current=false;setSourceActive(false);setError(message);refresh();
   };
   useEffect(()=>{
@@ -86,13 +91,40 @@ export default function App(){
       }catch(ex){handleError((ex as Error).message);}
       refresh();
     },50);
-    const visibility=()=>{if(document.hidden){engine.current?.session?.pause('Paused while this page is hidden.');if(engine.current?.calibrationRun?.state==='running'||engine.current?.collection?.state==='running')engine.current.interrupt('Page was hidden. Repeat the recording step.');}};
+    const checkpointTimer=setInterval(saveCheckpoint,2000);
+    const visibility=()=>{
+      const current=engine.current;
+      if(document.hidden){
+        current?.session?.pause('Paused while this page is hidden.');
+        if(current?.calibrationRun?.state==='running'||current?.collection?.state==='running')current.interrupt('Page was hidden. Repeat the recording step.');
+      }
+      if(playtest.current){
+        current?.event('page_visibility',{hidden:document.hidden,wallTime:new Date().toISOString()});
+        saveCheckpoint();
+      }
+    };
+    const pageHidden=()=>{
+      if(!playtest.current)return;
+      engine.current?.event('page_left',{wallTime:new Date().toISOString()});
+      saveCheckpoint();
+    };
     document.addEventListener('visibilitychange',visibility);
-    return()=>{clearInterval(timer);document.removeEventListener('visibilitychange',visibility);};
+    window.addEventListener('pagehide',pageHidden);
+    return()=>{
+      clearInterval(timer);
+      clearInterval(checkpointTimer);
+      document.removeEventListener('visibilitychange',visibility);
+      window.removeEventListener('pagehide',pageHidden);
+    };
   },[]);
   async function prepare(source:'serial'|'replay'|'board'){
     if(engine.current?.raw.length&&!window.confirm('Starting a new signal source replaces the current local recording. Download it first if needed. Continue?'))return false;
     generation.current++;running.current=false;await transport.current?.stop();transport.current=null;
+    if(playtest.current){
+      engine.current?.event('source_replaced',{nextSource:source,wallTime:new Date().toISOString()});
+      saveCheckpoint();
+      playtest.current=null;
+    }
     pendingExport.current=null;startDeadline.current=null;stalled.current=false;
     setSetup({device:'',electrodePlacement:''});setWaveformSlot(null);setReferenceNotice('');
     board.current=source==='board'?new BoardReading():null;
@@ -122,6 +154,7 @@ export default function App(){
         if(!e.raw.length){
           e.referenceV=packet.referenceV;e.adcMax=packet.adcMax;
           e.processor=new Processor(notch,packet.referenceV,packet.adcMax,packet.amplitudeUnit,notch);
+          playtest.current=new PlaytestLog(e);
         }else if(e.referenceV!==packet.referenceV||e.adcMax!==packet.adcMax||e.processor.amplitudeUnit!==packet.amplitudeUnit){
           throw new Error('Device settings changed. Reconnect and recalibrate.');
         }
@@ -204,12 +237,34 @@ export default function App(){
   }
   const level=fresh?e?.level??0:0,target=collecting?col!.target:s?.target??.3;
   const rest=calRunning?cal!.instruction==='rest':collecting?col!.resting||col!.label===0:training?s!.phase==='rest':true;
+  const trainingTarget=training&&s?.phase==='contract'
+    ? target===LIGHT_TRAINING_TARGET?'Light squeeze':'Firmer squeeze'
+    : null;
+  const inTarget=Math.abs(level-target)<=.1;
+  const referenceFeedback=fresh&&calRunning&&cal?.protocol==='quick'&&!rest;
+  const referenceSqueeze=referenceFeedback&&cal.detectsSqueeze(e!.latest!.rms);
+  // Use a small confirmation stream until the calibrated activity scale is available.
+  const gardenLevel=referenceSqueeze ? .35 : level;
   let title='Practice gentle control',description='Use your forearm muscles to water a flower.',symbol='✋',remaining:number|null=null;
   if(isReplay){title=replayDone?'Replay complete':running.current?'Playing recording':'Replay paused';description='Waveform inspection only. No new training score.';symbol=replayDone?'✓':running.current?'▷':'Ⅱ';}
-  else if(calRunning){title=rest?'Relax your hand':'Gently squeeze';description=rest?'Let your hand rest naturally.':'Use a comfortable effort. Do not squeeze as hard as you can.';symbol=rest?'✋':'✊';remaining=cal!.remaining;}
+  else if(calRunning){
+    title=rest?'Relax your hand':'Squeeze comfortably';
+    description=rest?'Open your hand and get ready to water.':'Hold a comfortable squeeze.';
+    symbol=rest?'✋':'✊';remaining=cal!.remaining;
+  }
   else if(collecting){title=col!.resting?'Relax':LABELS[col!.label];description=col!.resting?'Let the muscles rest.':heldOut?'Follow the cue. Use a comfortable effort.':col!.label===0?'Keep your hand relaxed.':col!.label===1?'Aim for the lower target.':'Aim for the higher target, comfortably.';symbol=col!.resting||col!.label===0?'✋':'✊';remaining=col!.remaining;}
   else if(paused){title='Take a break';description=sourceActive?s!.message:'The EMG connection closed. End this session to reconnect.';symbol='Ⅱ';}
-  else if(training){title=s!.phase==='familiar'?'Try the water':rest?fresh&&s!.relaxed?'Hand relaxed':'Relax':Math.abs(level-target)<=.1?'Keep steady':level>target+.1?'Ease a little':'Gently squeeze';description=s!.phase==='familiar'?'Gently squeeze, then relax. Watch the water change.':rest?'Let your hand rest.':'Keep the water in the target band.';symbol=rest?'✋':'✊';remaining=s!.remaining;}
+  else if(training){
+    if(s!.phase==='familiar'){
+      title='Try the water';description='Gently squeeze, then relax. Watch the water change.';
+    }else if(rest){
+      title=fresh&&s!.relaxed?'Hand relaxed':'Relax';description='Open your hand and take a breath.';
+    }else{
+      title=inTarget?'That’s it! Hold it':level>target+.1?'Ease off a little':'Squeeze a little more';
+      description=trainingTarget??'';
+    }
+    symbol=rest?'✋':'✊';remaining=s!.remaining;
+  }
   else if(finished){title=s!.state==='complete'?'Well done':'Session ended';description='Rest your hand. Review your results below.';symbol='✓';}
   else if(e?.source==='serial'&&!fresh&&cal?.state!=='failed'){
     title=signalTitle;description=signalHint;
@@ -217,15 +272,17 @@ export default function App(){
   else if(e?.calibration){title='You are ready';description='Try a gentle squeeze to check the water, then start when you are ready.';symbol='✓';}
   else if(e){title=cal?.state==='failed'?'Check the signal':'Set your reference';description=cal?.state==='failed'?cal.error:'Relax for 5 seconds, then squeeze comfortably for 5 seconds.';}
   if(reusableReference&&cal?.state!=='failed')description='Use your saved reference if the sensor and electrode placement are the same.';
-  const handAction:HandAction|null=calRunning||collecting||training?title==='Hand relaxed'?'relaxed':rest?'relax':title==='Keep steady'?'hold':title==='Ease a little'?'ease':'squeeze':null;
+  const handAction:HandAction|null=calRunning||collecting||training?title==='Hand relaxed'?'relaxed':rest?'relax':title==='That’s it! Hold it'?'hold':title==='Ease off a little'?'ease':'squeeze':null;
   const stage=heldOut?'test':calRunning?'reference':collecting||training?'training':paused?'paused':isReplay?'replay':finished?'finished':'ready';
   const gardenEffects=fresh&&!heldOut&&!isReplay&&!paused&&(!finished||!!collecting);
   const hasEffort=gardenEffects&&!!e?.calibration;
   const previewingActivity=hasEffort&&!s&&!collecting;
   const previewFlow=previewingActivity&&e!.latest!.rms>e!.calibration!.restThreshold;
   const displayedActivity=percent(Math.max(0,level));
-  const hasTarget=hasEffort&&!rest&&(!!collecting||!!training);
+  const hasTarget=hasEffort&&!rest&&(!!collecting||trainingTarget!==null);
   const wateringReward=hasTarget&&!!training&&!!s?.rewarded;
+  const liveTarget=e?.source==='serial'&&hasTarget&&trainingTarget!==null;
+  const targetFeedback=useTargetFeedback(e,liveTarget,inTarget);
   const canRecalibrate=!!e?.calibration&&!isReplay&&!e.busy;
   const signalStatus=!e?'Not connected':e.source==='replay'?'CSV replay':fresh?'EMG connected':signalTitle;
   const demoClassification=paused?'Paused':!e?.model?'Not trained':!fresh?'Waiting for signal':
@@ -238,10 +295,11 @@ export default function App(){
   const cueDuration=calRunning?cal!.durations[cal!.step]/1000:collecting?10:s?.phase==='familiar'?30:5;
   const guidance=isReplay?'View the waveform in research tools.':heldOut?'Follow the hand cue. Effort feedback is hidden for this test.':
     paused?'Training paused. No score is being recorded.':finished&&!collecting?'Review your trial results below.':
-    !fresh?signalHint:!e?.calibration?'Find your comfortable reference first.':
-    previewingActivity?'Relax, then gently squeeze to see your activity.':
-    rest?'Relaxation is part of the practice.':Math.abs(level-target)<=.1?'In the target band':
-    level>target+.1?'Reduce your effort slightly':'Increase your effort gently';
+    !fresh?signalHint:calRunning?'A steady, comfortable squeeze is all you need.':
+    !e?.calibration?'Find your comfortable reference first.':
+    previewingActivity?'Relax, then gently squeeze to see the water flow.':
+    trainingTarget?'The pot glows when you find the right squeeze.':
+    rest?'Let the water settle.':'Watch the water follow your hand.';
   const spoken=useRef('');
   useEffect(()=>{if(!audio||spoken.current===title)return;spoken.current=title;if('speechSynthesis' in window){speechSynthesis.cancel();const utterance=new SpeechSynthesisUtterance(title);utterance.lang='en-GB';utterance.rate=.8;speechSynthesis.speak(utterance);}},[title,audio]);
   function exportData(format:'session'|'raw'){
@@ -256,6 +314,18 @@ export default function App(){
   function restartReplay(){if(!e)return;pendingExport.current=null;const next=new Engine('replay',e.processor.notch,e.referenceV,e.adcMax,e.processor.amplitudeUnit,e.processor.notch100Hz);next.originalSource=e.originalSource;next.originalNotch50Hz=e.originalNotch50Hz;engine.current=next;replayIndex.current=0;lastReceived.current=performance.now();running.current=true;setSourceActive(true);setError('');refresh();}
   function removeSaved(record:SavedResult){if(!window.confirm('Delete this saved result from this browser? Keep a downloaded backup first.'))return;try{deleteResult(record.id);setSaved(loadResults());if(viewed?.id===record.id)setViewed(null);setSaveError('');}catch(ex){setSaveError((ex as Error).message);}}
   const phaseLabel=isReplay?'Recording replay':calRunning?`Reference · ${cal!.step===0?'rest':cal!.instruction==='contract'?`squeeze ${(cal!.step+1)/2} of ${cal!.contractionCount}`:'rest break'}`:collecting?`${heldOut?'Test':'Training'} examples · Trial ${col!.trial+1} of 18`:finished?s!.state==='complete'?'Session complete':'Session ended':s?`${s.block==='baseline'?'Before practice':s.block==='final'?'After practice':`Practice round ${s.round} of 3`} · Trial ${s.trial%6+1} of 6`:'Muscle control practice';
+  const monitor=playtest.current;
+  useEffect(()=>{
+    if(!monitor||e?.source!=='serial'||!e.raw.length)return;
+    e.event('player_cue',{
+      title,description,stage,phase:phaseLabel,handAction,target:hasTarget?target:null,
+      wateringReward,wallTime:new Date().toISOString(),
+    });
+  },[e,monitor,title,description,stage,phaseLabel,handAction,hasTarget,target,wateringReward]);
+  useEffect(()=>{
+    if(finished||paused||cal?.state==='complete'||cal?.state==='failed')saveCheckpoint();
+  },[s,finished,paused,cal,cal?.state]);
+
   return <main>
     <header>
       <span className="brand"><span className="brand-mark">✳</span> EMG Garden</span>
@@ -290,10 +360,9 @@ export default function App(){
       <section className="training-layout" data-stage={stage}>
         <div className="garden-panel">
           <div className="panel-heading"><span>{phaseLabel}</span><span className="source-chip">{isReplay?'Replay':fresh?'Live EMG':'Waiting for signal'}</span></div>
-          <Garden level={level} target={target} showEffort={hasEffort} showTarget={hasTarget} resting={rest&&!previewFlow} rewarded={wateringReward} effects={gardenEffects} daylight={daylight}/>
+          <Garden level={gardenLevel} target={target} showEffort={hasEffort} showTarget={hasTarget} showWater={hasEffort||referenceFeedback} resting={rest&&!previewFlow} rewarded={wateringReward} effects={gardenEffects} daylight={daylight} confirmTarget={liveTarget} targetPulse={targetFeedback.pulse}/>
           <p className="garden-caption">
-            {guidance}{wateringReward&&<span className="reward-note">Watering reward earned</span>}
-            {hasEffort&&<span className="mobile-effort" aria-hidden="true">Effort {displayedActivity}{hasTarget&&<> · Target {percent(target-.1)}–{percent(target+.1)}</>}</span>}
+            {guidance}{wateringReward&&<span className="reward-note" role="status">Flower watered!</span>}
           </p>
         </div>
         <div className="instruction" data-cue={handAction??undefined}>
@@ -332,7 +401,12 @@ export default function App(){
             </>}
           </div>
           {referenceNotice&&!training&&!collecting&&<p className="fine" role="status">{referenceNotice}</p>}
-          <label className="audio"><input type="checkbox" checked={audio} onChange={ev=>setAudio(ev.target.checked)}/> Spoken cues</label>
+          <div className="garden-audio-options">
+            <label className="audio"><input type="checkbox" checked={audio} onChange={ev=>setAudio(ev.target.checked)}/> Spoken cues</label>
+            {e.source==='serial'&&typeof AudioContext!=='undefined'&&
+              <label className="audio"><input type="checkbox" checked={targetFeedback.sound}
+                onChange={event=>targetFeedback.changeSound(event.target.checked)}/> Water drop sound</label>}
+          </div>
         </div>
       </section>
       {isReplay&&<div className="session-progress"><span>{(replayIndex.current/2000).toFixed(1)} / {(replay.current.length/2000).toFixed(1)} seconds</span><progress aria-label="Replay position" value={replayIndex.current} max={replay.current.length}/></div>}
@@ -395,7 +469,14 @@ export default function App(){
         </>}
         {e?.report&&!heldOut&&<><p>Held-out window accuracy: {percent(e.report.accuracy)}</p><table><caption>Windows from six held-out trials · actual rows, predicted columns</caption><thead><tr><th>State</th><th>Rest</th><th>Light</th><th>Stronger</th><th>Recall</th></tr></thead><tbody>{e.report.matrix.map((row,i)=><tr key={i}><th>{LABELS[i]}</th>{row.map((v,j)=><td key={j}>{v}</td>)}<td>{percent(e.report!.recall[i])}</td></tr>)}</tbody></table><p className="fine">Each class reaching 80% recall is an initial debugging target, not clinical validation. Simulation results remain synthetic.</p></>}
       </section>
-      <section><h2>Local recording</h2><p>{e?`${e.raw.length.toLocaleString()} raw samples · ${e.windows.length.toLocaleString()} feature windows`:'No recording yet'}</p><div className="button-row"><button className="secondary" disabled={!e?.raw.length||!!e.busy} onClick={()=>exportData('session')}>Download session JSON</button><button className="secondary" disabled={!e?.raw.length||!!e.busy} onClick={()=>exportData('raw')}>Download raw CSV</button></div><p className="fine">The two download buttons share a recording snapshot. Raw waveforms stay in memory until downloaded. Nothing is uploaded. Recording limit: 20 minutes per source.</p>{saveNotice&&<p role="status">{saveNotice}</p>}<a href="/README.md" target="_blank" rel="noreferrer">Setup and protocol guide</a></section>
+      <section><h2>Playtest monitor</h2><p>{e?`${e.raw.length.toLocaleString()} raw samples · ${e.windows.length.toLocaleString()} feature windows`:'No recording yet'}</p><div className="button-row"><button className="secondary" disabled={!e?.raw.length||!!e.busy} onClick={()=>exportData('session')}>Download session JSON</button><button className="secondary" disabled={!e?.raw.length||!!e.busy} onClick={()=>exportData('raw')}>Download raw CSV</button></div><p className="fine">Download both files for a paired export. Recording limit: 20 minutes per source.</p>
+        <p className="fine" role="status">{monitor?.error
+          ? 'Could not save a local checkpoint. The monitor will retry. The download buttons remain available.'
+          : monitor?.saved.samples
+            ? `Saved locally · ${monitor.saved.samples.toLocaleString()} raw samples.`
+            : monitor?'Starting local recording…':'Local recording starts when live EMG arrives.'}</p>
+        {monitor&&<p className="fine">Playtest ID {monitor.id}</p>}
+        {saveNotice&&<p role="status">{saveNotice}</p>}<a href="/README.md" target="_blank" rel="noreferrer">Setup and protocol guide</a></section>
       <section><h2>Saved results</h2><p className="fine">Completed trials are saved only in this browser. Raw waveforms are not saved here. Download a backup before clearing browser data.</p><label className="file-label">Open results JSON<input type="file" accept=".json,application/json" disabled={!!e?.busy} onChange={ev=>{const file=ev.target.files?.[0];if(file)void openResults(file);ev.target.value='';}}/></label>{!saved.length?<p>No saved results.</p>:<ul className="saved-list">{saved.map(record=><li key={record.id}><span>{new Date(record.createdAt).toLocaleString('en-GB')} · Round {record.number}<small>{sourceName(record.originalSource)} · {record.results.length} trials · {record.state}</small></span><button className="text-button" onClick={()=>setViewed(record)}>View</button><button className="text-button" onClick={()=>removeSaved(record)}>Delete</button></li>)}</ul>}</section>
     </div></details>}
     {viewed&&<section className="saved-review"><div className="saved-heading"><h2>Saved result · Round {viewed.number}</h2><button className="text-button" onClick={()=>setViewed(null)}>Close result</button></div><p>Read-only · {sourceName(viewed.originalSource)} · {viewed.state}</p><p className="fine">Reported source is file metadata, not an independently verified measurement. Comfortable reference {amplitude(viewed.calibration.reference,viewed.config.amplitudeUnit)}. Condition {viewed.conditionId}.</p><Results results={viewed.results} simulated={viewed.originalSource==='simulation'}/><button className="secondary" onClick={()=>download(`emg-garden-result-${viewed.number}.json`,JSON.stringify(viewed))}>Download saved result</button></section>}

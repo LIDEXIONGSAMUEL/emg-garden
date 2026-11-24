@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { extname, join, sep } from 'node:path'
+import { handlePlaytest, playtestPath } from './playtest-store.mjs'
 
 const host = '127.0.0.1'
 const port = Number(process.env.PORT ?? 5174)
@@ -38,6 +39,7 @@ async function main() {
       res.writeHead(status, { 'Content-Type': type, 'Content-Length': Buffer.byteLength(body), 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
       res.end(req.method === 'HEAD' ? undefined : body)
     }
+    if (req.url === playtestPath) return handlePlaytest(req, res, process.cwd(), port)
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.setHeader('Allow', 'GET, HEAD')
       return send(405, 'Method not allowed')
