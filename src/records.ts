@@ -1,12 +1,13 @@
+import {activePlayerId,collectWater} from './profiles';
 import type {Calibration,OriginalSource} from './signal';
-import type {CalibrationProtocol,TrialResult} from './session';
+import {TRAINING_TRIALS,trainingBlock,DEFAULT_TARGET_TOLERANCE,getTrainingTarget,type CalibrationProtocol,type TrialResult} from './session';
 import type {AcquisitionSetup,Engine,Source} from './engine';
 import type {ModelReport} from './model';
 import {DEFAULT_EMG_BAUD,UNO_EMG_BAUD,type EmgBaudRate} from './serial';
 
 type Config=ReturnType<Engine['export']>['config'];
 export type SavedReference={conditionId:string;config:Config;calibration:Calibration;setup:AcquisitionSetup;baudRate:EmgBaudRate;protocol?:CalibrationProtocol};
-export type SavedResult={schema:'emg-garden-result/1';id:string;createdAt:string;source:Source;originalSource:OriginalSource;state:'complete'|'stopped'|'interrupted';number:number;conditionId:string;config:Config;calibration:Calibration;results:TrialResult[];modelReport:ModelReport|null};
+export type SavedResult={plannedTrials:number;setup?:AcquisitionSetup;playerId?:string;protocol?:CalibrationProtocol;schema:'emg-garden-result/1';id:string;createdAt:string;source:Source;originalSource:OriginalSource;state:'complete'|'stopped'|'interrupted';number:number;conditionId:string;config:Config;calibration:Calibration;results:TrialResult[];modelReport:ModelReport|null};
 const KEY='emg-garden.saved-results.v1';
 const REFERENCE_KEY='emg-garden.saved-reference.v1';
 type Obj=Record<string,unknown>;
@@ -45,25 +46,29 @@ function parseReference(v:unknown):SavedReference{
     baudRate,protocol,
   };
 }
-export function loadReference():SavedReference|null{
+export function loadReference(playerId=activePlayerId()):SavedReference|null{
   try{
-    const stored=localStorage.getItem(REFERENCE_KEY);
+    const stored=localStorage.getItem(playerId?REFERENCE_KEY+'.'+playerId:REFERENCE_KEY);
     return stored?parseReference(JSON.parse(stored)):null;
   }catch{return null;}
 }
-export function saveReference(value:SavedReference){
+export function saveReference(value:SavedReference,playerId=activePlayerId()){
   const record=parseReference(value);
-  localStorage.setItem(REFERENCE_KEY,JSON.stringify(record));
+  localStorage.setItem(playerId?REFERENCE_KEY+'.'+playerId:REFERENCE_KEY,JSON.stringify(record));
   return record;
 }
 export function matchesReference(value:SavedReference,settings:Config,baudRate:EmgBaudRate){
   return value.baudRate===baudRate&&value.config.notch100Hz===settings.notch100Hz&&(Object.keys(settings) as (keyof Config)[])
     .every(key=>settings[key]===value.config[key]);
 }
-function trial(v:unknown):TrialResult{
-  const r=object(v),n=num(r.trial,1,30),block=n<=6?'baseline':n<=24?'practice':'final',round=block==='practice'?Math.floor((n-7)/6)+1:1;
-  if(!Number.isInteger(n)||r.block!==block||r.round!==round||r.target!==(n%2===1?.3:.6)||r.tolerance!==.1)throw invalid();
-  const result:TrialResult={trial:n,block,round,target:n%2===1?.3:.6,tolerance:.1,error:nullable(r.error,0),inZone:nullable(r.inZone,0,1),variation:nullable(r.variation,0),coverage:num(r.coverage,0,1),restCoverage:num(r.restCoverage,0,1),residual:nullable(r.residual),relaxationMs:nullable(r.relaxationMs,0,5000),rewarded:bool(r.rewarded),interrupted:bool(r.interrupted),valid:bool(r.valid)};
+function trial(v:unknown,plannedTrials:number):TrialResult{
+  const r=object(v),n=num(r.trial,1,plannedTrials);
+  const block=plannedTrials===30?(n<=6?'baseline':n<=24?'practice':'final'):trainingBlock(n-1);
+  const round=plannedTrials===30&&block==='practice'?Math.floor((n-7)/6)+1:1;
+  const {target,tolerance:currentTolerance}=getTrainingTarget(n-1),tolerance=num(r.tolerance);
+  if(!Number.isInteger(n)||r.block!==block||r.round!==round||r.target!==target||
+    (tolerance!==DEFAULT_TARGET_TOLERANCE&&tolerance!==currentTolerance))throw invalid();
+  const result:TrialResult={trial:n,block,round,target,tolerance,error:nullable(r.error,0),inZone:nullable(r.inZone,0,1),variation:nullable(r.variation,0),coverage:num(r.coverage,0,1),restCoverage:num(r.restCoverage,0,1),residual:nullable(r.residual),relaxationMs:nullable(r.relaxationMs,0,5000),rewarded:bool(r.rewarded),interrupted:bool(r.interrupted),valid:bool(r.valid)};
   if(result.valid&&(result.coverage<.8||result.restCoverage<.8||result.interrupted||result.error===null||result.inZone===null||result.variation===null))throw invalid();
   if(result.error!==null&&result.inZone!==null&&(result.error+1e-9<(1-result.inZone)*result.tolerance||result.inZone===1&&result.error>result.tolerance+1e-9))throw invalid();
   const keys=['contractStartMs','holdStartMs','holdEndMs','restStartMs','endMs'] as const;
@@ -88,11 +93,17 @@ function report(v:unknown):ModelReport|null{
 function saved(v:unknown):SavedResult{
   const r=object(v),source=text(r.source),originalSource=text(r.originalSource),state=text(r.state),createdAt=text(r.createdAt),number=num(r.number,1,50);
   if(r.schema!=='emg-garden-result/1'||!['simulation','serial','replay'].includes(source)||!['simulation','serial','unknown'].includes(originalSource)||source!=='replay'&&source!==originalSource||!['complete','stopped','interrupted'].includes(state)||!Number.isFinite(Date.parse(createdAt))||!Number.isInteger(number))throw invalid();
-  const results=values(r.results,30).map(trial);
+  const plannedTrials=r.plannedTrials===undefined?30:r.plannedTrials;
+  if(plannedTrials!==TRAINING_TRIALS&&plannedTrials!==30)throw invalid();
+  const results=values(r.results,plannedTrials).map(row=>trial(row,plannedTrials));
   const settings=config(r.config);
   if(settings.amplitudeUnit==='adc_counts'&&originalSource!=='serial')throw invalid();
-  if(results.some((t,i)=>t.trial!==i+1)||state==='complete'&&results.length!==30)throw invalid();
-  return {schema:'emg-garden-result/1',id:text(r.id),createdAt,source:source as Source,originalSource:originalSource as OriginalSource,state:state as SavedResult['state'],number,conditionId:text(r.conditionId),config:settings,calibration:calibration(r.calibration,settings.amplitudeUnit==='adc_counts'?settings.adcMax!:5.5),results,modelReport:report(r.modelReport)};
+  const firmerTolerance=results[1]?.tolerance;
+  if(results.some((t,i)=>t.trial!==i+1||(i%2===1&&t.tolerance!==firmerTolerance))||state==='complete'&&results.length!==plannedTrials)throw invalid();
+  if(r.protocol!==undefined&&r.protocol!=='quick'&&r.protocol!=='full')throw invalid();
+  const notes=r.setup===undefined?null:object(r.setup);
+  const setup=notes?{device:notes.device===''?'':text(notes.device,120),electrodePlacement:notes.electrodePlacement===''?'':text(notes.electrodePlacement,120)}:undefined;
+  return {plannedTrials,setup,...(r.playerId===undefined?{}:{playerId:text(r.playerId,120)}),protocol:r.protocol,schema:'emg-garden-result/1',id:text(r.id),createdAt,source:source as Source,originalSource:originalSource as OriginalSource,state:state as SavedResult['state'],number,conditionId:text(r.conditionId),config:settings,calibration:calibration(r.calibration,settings.amplitudeUnit==='adc_counts'?settings.adcMax!:5.5),results,modelReport:report(r.modelReport)};
 }
 export function parseResultFile(input:string):SavedResult[]{
   if(input.length>20_000_000)throw new Error('Choose a results JSON smaller than 20 MB.');
@@ -103,7 +114,7 @@ export function parseResultFile(input:string):SavedResult[]{
   const originalSource=r.originalSource??(r.source==='replay'?'unknown':r.source);
   const records=sessions.map(value=>{
     const s=object(value);if(!['running','paused','complete','stopped'].includes(String(s.state)))throw invalid();
-    return saved({schema:'emg-garden-result/1',id:`${text(r.createdAt)}:session-${num(s.number,1,50)}`,createdAt:r.createdAt,source:r.source,originalSource,state:s.state==='complete'?'complete':s.state==='stopped'?'stopped':'interrupted',number:s.number,conditionId:s.conditionId??`${text(r.createdAt)}:legacy-session-${s.number}`,config:r.config,calibration:s.calibration,results:s.results,modelReport:s.modelReport});
+    return saved({plannedTrials:s.plannedTrials,playerId:r.playerId,setup:s.setup,protocol:s.protocol,schema:'emg-garden-result/1',id:`${text(r.createdAt)}:session-${num(s.number,1,50)}`,createdAt:r.createdAt,source:r.source,originalSource,state:s.state==='complete'?'complete':s.state==='stopped'?'stopped':'interrupted',number:s.number,conditionId:s.conditionId??`${text(r.createdAt)}:legacy-session-${s.number}`,config:r.config,calibration:s.calibration,results:s.results,modelReport:s.modelReport});
   });
   if(!records.length||new Set(records.map(r=>r.id)).size!==records.length)throw invalid();return records;
 }
@@ -112,9 +123,16 @@ export function loadResults():SavedResult[]{
   catch{throw new Error('Saved results cannot be read on this browser. Keep your downloaded backup.');}
 }
 export function saveResults(records:SavedResult[]):void{
-  const existing=loadResults(),next=new Map(existing.map(r=>[r.id,r]));records.map(saved).forEach(r=>next.set(r.id,r));
+  const existing=loadResults(),next=new Map(existing.map(r=>[r.id,r]));const updates=records.map(saved);
+  for(const row of updates){
+    const previous=next.get(row.id);
+    if(previous?.playerId&&row.playerId&&previous.playerId!==row.playerId)throw new Error('This round already belongs to another player.');
+    if(previous?.playerId)row.playerId=previous.playerId;
+    if(previous&&previous.results.length>row.results.length)continue;
+    next.set(row.id,row);
+  }
   if(next.size>50)throw new Error('The local store has 50 results. Download and delete an old result before saving another.');
-  try{localStorage.setItem(KEY,JSON.stringify([...next.values()]));}catch{throw new Error('Could not save results on this browser. Download the results before leaving.');}
+  try{localStorage.setItem(KEY,JSON.stringify([...next.values()]));updates.forEach(row=>collectWater(next.get(row.id)!));}catch{throw new Error('Could not save results on this browser. Download the results before leaving.');}
 }
 export function deleteResult(id:string):void{
   const rows=loadResults().filter(r=>r.id!==id);

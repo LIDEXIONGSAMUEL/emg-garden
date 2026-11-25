@@ -1,3 +1,4 @@
+import {BandResults} from './Evaluation';
 import {mean} from './signal';
 import type {TrialResult} from './session';
 
@@ -16,6 +17,7 @@ const metrics=[['inZone','Time in target'],['error','Target error']] as const;
 
 function PracticeComparison({results}:{results:TrialResult[]}){
   return <div className="demo-comparison">
+    <BandResults rows={results} compact/>
     {blocks.map(([block,label])=>{
       const trials=results.filter(trial=>trial.block===block);
       const valid=trials.filter(trial=>trial.valid);

@@ -1,13 +1,15 @@
 // @vitest-environment jsdom
 import {beforeEach,expect,it,vi} from 'vitest';
+import {createPlayer,waterCount,plantStage} from './profiles';
+import {trendGroups} from './progress';
 import {Engine} from './engine';
 import {DemoSignal} from './test/simulation';
 import {parseResultFile,loadResults,saveResults,deleteResult} from './records';
 
-function recording(){
+function recording(trials=1){
   const e=new Engine('simulation'),d=new DemoSignal();e.receive(d.next(2000,0));
   e.calibration={baseline:.002,reference:.2,restThreshold:.003,noise:.0001};e.startTraining();
-  for(let n=0;n<800;n++)e.receive(d.next(100,e.session!.phase==='contract'?e.session!.target:0));
+  for(let n=0;n<600+trials*200;n++)e.receive(d.next(100,e.session!.phase==='contract'?e.session!.target:0));
   e.session!.stop();return e;
 }
 beforeEach(()=>{localStorage.clear();vi.restoreAllMocks();});
@@ -34,6 +36,18 @@ it('opens legacy session exports and portable saved results without inventing mi
   const [record]=parseResultFile(JSON.stringify(old));expect(record.originalSource).toBe('simulation');
   expect(parseResultFile(JSON.stringify(record))).toEqual([record]);
   expect(parseResultFile(JSON.stringify({...old,source:'replay'}))[0].originalSource).toBe('unknown');
+});
+it('preserves each round’s recorded firmer tolerance when opening saved results',()=>{
+  const current=recording(4).export();
+  const legacy=structuredClone(current);
+  legacy.sessions[0].results.forEach(result=>{result.tolerance=.1;});
+  const [oldRound]=parseResultFile(JSON.stringify(legacy));
+  const [newRound]=parseResultFile(JSON.stringify(current));
+  expect(oldRound.results.map(result=>result.tolerance)).toEqual([.1,.1,.1,.1]);
+  expect(newRound.results.map(result=>result.tolerance)).toEqual([.1,.2,.1,.2]);
+  expect(parseResultFile(JSON.stringify(newRound))).toEqual([newRound]);
+  current.sessions[0].results[3].tolerance=.1;
+  expect(()=>parseResultFile(JSON.stringify(current))).toThrow();
 });
 it('rejects malformed, impossible or oversized result files before changing saved records',()=>{
   const good=recording().export();saveResults(parseResultFile(JSON.stringify(good)));
@@ -86,4 +100,31 @@ it('uses per-round model evidence and leaves missing historical reports unknown'
   for(const schema of ['emg-garden-0.1.0','emg-garden-0.1.1','emg-garden-1.0.0']){
     expect(parseResultFile(JSON.stringify({...exported,schema,modelReport,sessions:[{...exported.sessions[0],modelReport:undefined}]}))[0].modelReport).toBeNull();
   }
+});
+
+it('credits each valid earned drop once and preserves a round owner across imports',()=>{
+  const [base]=parseResultFile(JSON.stringify(recording(6).export()));
+  const player=createPlayer('A'),other=createPlayer('A');
+  expect(player.id).not.toBe(other.id);
+  const owned:typeof base={...base,playerId:player.id,source:'serial',originalSource:'serial',results:base.results.map(t=>({...t,valid:true,rewarded:true}))};
+  saveResults([owned]); saveResults([owned]); saveResults([{...owned,playerId:undefined,results:owned.results.slice(0,2)}]);
+  expect(loadResults()[0].results).toHaveLength(6);
+  expect(waterCount(player.id)).toBe(6);expect(plantStage(6)).toBe('In bloom');expect(plantStage(7)).toBe('Sprout');
+  expect(()=>saveResults([{...owned,playerId:other.id}])).toThrow(/belongs/);
+  expect(waterCount(other.id)).toBe(0);
+  saveResults([{...base,id:'synthetic',playerId:other.id}]);
+  saveResults([{...owned,id:'replayed',playerId:other.id,source:'replay'}]);
+  saveResults([{...owned,id:'ineligible',playerId:other.id,results:owned.results.map((t,i)=>({...t,valid:i%2===0,rewarded:i%2===1}))}]);
+  expect(waterCount(other.id)).toBe(0);
+  deleteResult(owned.id);expect(waterCount(player.id)).toBe(6);
+});
+it('groups a player’s chronological final trials by comparable measurement settings',()=>{
+  const e=recording(15);
+  const [base]=parseResultFile(JSON.stringify(e.export()));
+  const round:typeof base={...base,source:'serial',originalSource:'serial',playerId:'first',protocol:'quick',createdAt:'2026-01-01T00:00:00Z'};
+  const newer={...round,createdAt:'2026-02-01T00:00:00Z',id:'second'};
+  const groups=trendGroups([newer,round,{...round,playerId:'other'},{...round,source:'replay'},{...round,protocol:undefined},{...round,config:{...round.config,notch50Hz:null}},{...round,setup:{device:'new sensor',electrodePlacement:'forearm'}}],'first');
+  expect(groups).toHaveLength(4);
+  expect(groups[0].points.map(p=>p.record.id)).toEqual([round.id,newer.id]);
+  expect(groups.map(g=>g.target).sort()).toEqual([.3,.3,.6,.6]);
 });

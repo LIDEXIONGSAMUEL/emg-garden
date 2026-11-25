@@ -7,7 +7,7 @@
 | Signal processing | Offset removal, state across packets, gaps reset, clipping/unknown quality distinguished | src/signal.test.ts | Existing |
 | Recording format | Provenance and 5 V ADC configuration round trip; malformed/mixed metadata rejects; legacy unknowns preserved | src/signal.test.ts | Existing |
 | Bounds and time | Safe indices, window midpoint, exact sample bound accepted and excess rejected | src/signal.test.ts | Existing |
-| Fixed protocol | 30 trials, unchanged pre/post conditions, full hold segment, pause/gap invalidity | src/session.test.ts, src/engine.test.ts | Existing |
+| Fixed protocol | 15 trials, unchanged pre/post conditions, full hold segment, pause/gap invalidity | src/session.test.ts, src/engine.test.ts | Existing |
 | Classifier collection | Whole windows omit transitions; only last two trials/class held out | src/session.test.ts | Existing |
 | Classification display | Current prediction must agree with the temporal majority and meet 0.60; class changes/low confidence export null pairs | src/engine.test.ts | Added in 1.0.1 |
 | Model evaluation | Whole-trial split, training-only statistics, invalid labels rejected | src/model.test.ts | Existing |
@@ -28,7 +28,7 @@ The later guided-feedback update on the same date passed 92 application tests an
 
 Use target Mac Chrome against the production build. Record actual results in STATUS.md, not inferred from this checklist.
 
-- Live reference, familiarization pause/resume and 30-trial completion.
+- Live reference, familiarization pause/resume and 15-trial completion.
 - 18 example trials, held-out feedback hidden, operator review and kNN fitting.
 - Reopen saved results after refresh without restarting scoring.
 - Import valid/invalid recordings; verify replay pause, restart, end and source/config retention.

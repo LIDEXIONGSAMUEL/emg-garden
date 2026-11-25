@@ -51,15 +51,15 @@ it('keeps acquisition notes tied to their serial calibration conditions',()=>{
     {conditionId:engine.createdAt+':reference-2',protocol:'full',acquisition:{device:'Uno and Aries',electrodePlacement:'Left forearm'}},
   ]);
 });
-it('completes the full calibrated protocol with 30 scored synthetic trials',()=>{
+it('completes the full calibrated protocol with 15 scored synthetic trials',()=>{
   const e=new Engine('simulation'),demo=new DemoSignal();e.receive(demo.next(2000,0));e.startCalibration();
   for(let n=0;n<1420;n++)e.receive(demo.next(100,e.calibrationRun?.instruction==='contract'?1:0));
   e.startTraining();
-  for(let n=0;n<6600;n++)e.receive(demo.next(100,e.session!.phase==='rest'?0:e.session!.target));
+  for(let n=0;n<3600;n++)e.receive(demo.next(100,e.session!.phase==='rest'?0:e.session!.target));
   const saved=e.export();
-  expect(saved.sessionState).toBe('complete');expect(saved.results).toHaveLength(30);
+  expect(saved.sessionState).toBe('complete');expect(saved.results).toHaveLength(15);
   expect(saved.results.every(r=>r.valid)).toBe(true);
-  expect(saved.results.slice(0,6).map(r=>r.target)).toEqual(saved.results.slice(-6).map(r=>r.target));
+  expect(saved.results.slice(0,5).map(r=>r.target)).toEqual(saved.results.slice(-5).map(r=>r.target));
   expect(saved.sessions[0].results).toEqual(saved.results);
 });
 it('invalidates active control on a sequence discontinuity',()=>{

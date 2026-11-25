@@ -8,18 +8,19 @@ Version 1.0.1 implements the device-independent workflow, saved result summaries
 
 Saved files retain their declared source, including historical simulation recordings. No camera is required.
 
-## Repository
+## Open in your own Codex
 
-This is Samuel Li's personal copy of the BME 42129 group project. The original collaboration repository and its contributor history are provided by [usoony515/emg-garden](https://github.com/usoony515/emg-garden).
-
-Clone this copy from an account with access:
+1. Ask the owner for access to [the shared repository](https://github.com/usoony515/emg-garden), then accept the GitHub invitation. Having the link alone does not grant private-repository access.
+2. Clone that repository to your own computer. Open the cloned folder as a project in Codex. Do not copy another person's Codex chat or credentials.
+3. Ask Codex to read `AGENTS.md`, `CONTRIBUTING.md` and `STATUS.md` first.
+4. Create a separate branch for your change, run checks and open a pull request. The shared repository, rather than any chat, is the shared source of truth.
 
 ```sh
-git clone https://github.com/LIDEXIONGSAMUEL/emg-garden.git
+git clone https://github.com/usoony515/emg-garden.git
 cd emg-garden
 ```
 
-For shared group changes, use a branch and pull request in the group repository. See [CONTRIBUTING.md](CONTRIBUTING.md).
+GitHub authentication is required for this private repository. A downloaded source ZIP can also be opened as a local Codex project, but separate ZIP copies do not synchronize with each other.
 
 ## Run locally on Mac
 
@@ -46,7 +47,7 @@ Do not run development and production servers on the same port. The production s
 
 ## Train with real EMG
 
-Choose **Connect EMG** and select the Uno serial port. When the signal is ready, choose **Set my reference**. Rest for five seconds, then hold one comfortable contraction for five seconds.
+Create or select a gardener. In **My garden**, choose **Connect EMG** (or **Continue growing** for a returning gardener) and select the Uno serial port. When the signal is ready, choose **Set my reference**. Rest for five seconds, then hold one comfortable contraction for five seconds.
 
 For the full research protocol, choose **Full reference (70 seconds)** under **Setup & research tools**. It uses 15 seconds of rest and three comfortable five-second contractions with 20-second breaks. Session exports identify the reference protocol.
 
@@ -54,11 +55,15 @@ A successful reference is saved on this browser as soon as calibration finishes.
 
 During the quick reference, water appears when the signal registers a squeeze. After calibration, try another gentle squeeze to preview the water. In training, follow the light or firmer squeeze cue. The pot glows at the target and the flower celebrates a steady hold. Session details and research tools show the numerical measurements.
 
-**Start training** runs a 30-second familiarization followed by six baseline trials, eighteen practice trials and six final trials. Each trial has five seconds of contraction and five seconds of relaxation. Before and after targets are identical. Pause or stop at any time.
+**Start training** runs a 30-second familiarization followed by five baseline trials, five practice trials and five final trials (three minutes including familiarization). Each trial has five seconds of contraction and five seconds of relaxation. The light target accepts 0.20–0.40 and the firmer target accepts 0.40–0.80 in every block. Pause or stop at any time.
 
 The active cue now uses a consistent hand drawing. Open hand means relax or ease; a gently closed hand means squeeze or hold. The short English title is also the optional spoken cue. During a training rest, **Hand relaxed** and a check appear only after clean activity has stayed below the existing rest threshold for 300 ms. The confirmation disappears on renewed activity, pause or loss of fresh signal. This feedback does not change scoring and is not shown during held-out classifier examples or replay.
 
 A signal stall or invalid input pauses training. After a recoverable stall, wait for a fresh, clean window and choose **Continue**. If the port closes, end the interrupted session and reconnect.
+
+Each valid serial trial with a continuous 0.3-second hold in the target earns one water drop. The pot sprouts at one drop, grows leaves at three and blooms at six. Flowers and training summaries belong to the selected gardener on this browser.
+
+In **Training & Evaluation**, select a round and trial to see the recorded EMG, normalized activity and scoring interval. Export both the raw CSV and session JSON before closing the recording if you want to inspect its waveform later. **Garden history** compares final-block performance for each target across rounds using matching recorded settings. Training results imported from another browser or an older version can be assigned to a gardener after review.
 
 ## Saved results and replay
 

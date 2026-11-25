@@ -5,9 +5,13 @@ const c={baseline:.01,reference:.11,restThreshold:.012,noise:.001};
 const frame=(time:number,a:number):Frame=>({time,centerTime:time-100,rms:c.baseline+a*(c.reference-c.baseline),mav:.1,wl:2,startIndex:Math.round(time*2)-400,endIndex:Math.round(time*2)-1,quality:'good'});
 it('completes the fixed protocol without changing baseline or final conditions',()=>{
   const s=new TrainingSession(c);s.start(0);
-  for(let t=50;t<=330_000;t+=50){s.push(frame(t,s.phase==='contract'?s.target:0));}
-  expect(s.state).toBe('complete');expect(s.results).toHaveLength(30);
+  for(let t=50;t<180_000;t+=50){s.push(frame(t,s.phase==='contract'?s.target:0));}
+  expect(s.state).toBe('running');expect(s.results).toHaveLength(14);
+  s.push(frame(180_000,0));
+  expect(s.state).toBe('complete');expect(s.results).toHaveLength(15);
   const pre=s.results.filter(r=>r.block==='baseline'),post=s.results.filter(r=>r.block==='final');
+  expect(pre).toHaveLength(5);expect(post).toHaveLength(5);
+  expect(s.results.filter(r=>r.block==='practice')).toHaveLength(5);
   expect(pre.map(r=>[r.target,r.tolerance])).toEqual(post.map(r=>[r.target,r.tolerance]));
   expect(pre.every(r=>r.inZone!==null&&r.inZone>.9)).toBe(true);
 });
@@ -21,6 +25,31 @@ it('does not reward a trial that missed the target',()=>{
   const s=new TrainingSession(c);s.start(0);
   for(let t=50;t<=40_000;t+=50)s.push(frame(t,0));
   expect(s.results).toHaveLength(1);expect(s.results[0].inZone).toBe(0);expect(s.results[0].rewarded).toBe(false);
+});
+it('awards water after 300 consecutive milliseconds and scores the final two seconds separately',()=>{
+  const s=new TrainingSession(c);s.start(0);
+  for(let t=50;t<30000;t+=50)s.push(frame(t,0));
+  s.push(frame(30000,s.target));
+  for(let t=30050;t<=30150;t+=50)s.push(frame(t,t===30150?0:s.target));
+  expect(s.holdFraction).toBe(.5);
+  s.push(frame(30200,s.target));
+  expect(s.holdFraction).toBe(0);
+  for(let t=30250;t<=30450;t+=50)s.push(frame(t,s.target));
+  expect(s.rewarded).toBe(false);
+  s.push(frame(30500,0));
+  expect(s.holdFraction).toBe(1);
+  expect(s.rewarded).toBe(true);
+  for(let t=30550;t<=40000;t+=50)s.push(frame(t,0));
+  expect(s.results[0]).toMatchObject({rewarded:true,valid:true,inZone:0,coverage:1});
+});
+it.each([[.39,false],[.4,true],[.8,true],[.81,false]])('scores firmer trials at activity %s using the wider band',(effort,inTarget)=>{
+  const s=new TrainingSession({...c,baseline:0,reference:1});s.start(0);
+  for(let t=50;t<=50_000;t+=50){
+    const rms=s.phase==='contract'?(s.trial===0?.45:effort):0;
+    s.push({...frame(t,0),rms});
+  }
+  expect(s.results[0]).toMatchObject({target:.3,tolerance:.1,inZone:0,rewarded:false,valid:true});
+  expect(s.results[1]).toMatchObject({target:.6,tolerance:.2,inZone:inTarget?1:0,rewarded:inTarget,valid:true});
 });
 it('rejects clipped signal and does not advance the protocol',()=>{
   const s=new TrainingSession(c);s.start(0);s.push({...frame(50,.3),quality:'clipped'});

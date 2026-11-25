@@ -1,9 +1,13 @@
 import {useId} from 'react';
 import {GardenParticles} from './GardenParticles';
+import {DEFAULT_TARGET_TOLERANCE,isInTargetBand} from './session';
 
 type GardenProps = {
+  growth?:number;
+  holdFraction?:number;
   level?: number;
   target?: number;
+  tolerance?: number;
   showEffort?: boolean;
   showTarget?: boolean;
   showWater?: boolean;
@@ -26,14 +30,15 @@ function activityDisplayLevel(level:number){
   return activity<=1 ? activity*.8 : 1-.2/activity;
 }
 
-export function Garden({level=0,target=.3,showEffort=false,showTarget=false,showWater=showEffort,resting=false,rewarded=false,preview=false,effects=false,daylight=false,confirmTarget=false,targetPulse=null}:GardenProps){
+export function Garden({growth=6,holdFraction=0,level=0,target=.3,tolerance=DEFAULT_TARGET_TOLERANCE,showEffort=false,showTarget=false,showWater=showEffort,resting=false,rewarded=false,preview=false,effects=false,daylight=false,confirmTarget=false,targetPulse=null}:GardenProps){
   const id=useId();
   const paint=(name:string)=>`url(#${id}-${name})`;
   const water=activityDisplayLevel(level);
-  const inZone=showTarget&&Math.abs(level-target)<=.1;
+  const inZone=showTarget&&isInTargetBand(level,target,tolerance);
   const flow=showWater&&!resting&&level>.025?water:0;
   const flowing=flow>0;
   const meterY=(value:number)=>252-144*activityDisplayLevel(value);
+  const bandTop=meterY(target+tolerance),bandBottom=meterY(target-tolerance);
   const description=inZone?'Garden with water flowing and the flowerpot glowing.':
     flowing?'Garden with water flowing onto the flowerpot.':'Illustrated garden with a flower and watering can.';
 
@@ -147,16 +152,18 @@ export function Garden({level=0,target=.3,showEffort=false,showTarget=false,show
       <ellipse cx="337" cy="347" rx="119" ry="13" fill="#0f2430" opacity=".58"/>
       <ellipse className="garden-pot-glow" cx="335" cy="341" rx="70" ry="12" fill="none" stroke="#b8f9cb" strokeWidth="3" aria-hidden="true"/>
       <ellipse className="garden-ripple" cx="335" cy="345" rx="64" ry="11" fill="none" stroke="#a7e3b9" strokeWidth="2"/>
-      <g className="garden-plant">
+      {growth===0&&<ellipse cx="335" cy="273" rx="10" ry="6" fill="#e3c78a"/>}
+      <g transform={growth<3?'translate(335 278) scale(.42) translate(-335 -278)':undefined} opacity={growth===0?0:1}><g className="garden-plant">
         <path d="M335 294Q347 251 333 209Q328 186 335 153" fill="none" stroke="#6eb590" strokeWidth="9" strokeLinecap="round"/>
         <path d="M337 264Q277 254 266 221Q312 216 337 264M341 238Q385 191 413 206Q389 237 341 238" fill={paint('leaf')}/>
         <path d="M276 228Q316 242 337 264M341 238Q383 219 404 210" fill="none" stroke="#d1e9b0" strokeWidth="1.6" opacity=".58"/>
-        <g className="garden-bloom">
+        <g className="garden-bloom" visibility={growth<6?'hidden':undefined}>
           {petals.map(angle=><path key={angle} transform={`rotate(${angle} 335 153)`} d="M335 156c-17-5-26-23-21-42 3-12 12-21 21-25 9 4 18 13 21 25 5 19-4 37-21 42Z" fill={paint('petal')} stroke="#ffd6a2" strokeWidth="1.2"/>)}
           <circle cx="335" cy="153" r="25" fill="#472f41" stroke="#fbd28f" strokeWidth="3"/>
           <circle cx="335" cy="153" r="17" fill="#774954"/>
           <path d="M328 145h.1m9-4h.1m9 10h.1m-14 5h.1m8 8h.1m-17-2h.1" fill="none" stroke="#f1bd88" strokeWidth="3" strokeLinecap="round"/>
         </g>
+      </g>
       </g>
       <g className="garden-pot" key={'pot-'+targetPulse} data-pop={targetPulse!==null||undefined}>
         <path d="M281 278h111l-16 57q-2 8-11 8h-57q-9 0-11-8Z" fill={paint('pot')}/>
@@ -167,6 +174,7 @@ export function Garden({level=0,target=.3,showEffort=false,showTarget=false,show
           fill="none" stroke="#bbffdc" strokeWidth="4" aria-hidden="true"/>}
       </g>
 
+      {holdFraction>0&&<circle cx="335" cy="296" r="33" fill="none" stroke="#f6d679" strokeWidth="5" pathLength="1" strokeDasharray={holdFraction+' 1'} transform="rotate(-90 335 296)"/>}
       <g className="garden-can" data-flowing={flowing||undefined}>
         <path d="M119 186q-41-33-60 1-13 35 47 38" fill="none" stroke="#488b96" strokeWidth="10" strokeLinecap="round"/>
         <path d="M113 184q-36-24-49 5-8 29 37 32" fill="none" stroke="#a2ded1" strokeWidth="3" strokeLinecap="round" opacity=".72"/>
@@ -201,8 +209,8 @@ export function Garden({level=0,target=.3,showEffort=false,showTarget=false,show
         <text x="537" y="97" textAnchor="middle" className="garden-meter-label">EFFORT</text>
         <rect x="525" y="108" width="14" height="144" rx="7" fill="#456375"/>
         {showTarget&&<>
-          <rect className="garden-target" x="516" y={meterY(target+.1)} width="32" height={meterY(target-.1)-meterY(target+.1)} rx="5"/>
-          <path d={`M512 ${meterY(target+.1)}h41m-41 ${meterY(target-.1)}h41`} fill="none" stroke="#a4edc6" strokeWidth="1.2" strokeDasharray="3 3"/>
+          <rect className="garden-target" x="516" y={bandTop} width="32" height={bandBottom-bandTop} rx="5"/>
+          <path d={`M512 ${bandTop}h41m-41 ${bandBottom}h41`} fill="none" stroke="#a4edc6" strokeWidth="1.2" strokeDasharray="3 3"/>
           <text x="554" y={meterY(target)+4} className="garden-target-label">Aim here</text>
         </>}
         <g clipPath={paint('meter')}><rect className="garden-meter-fill" x="525" y={meterY(level)} width="14" height={144*water} rx="7" fill={paint('water')}/></g>
