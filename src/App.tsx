@@ -1,10 +1,10 @@
-import {Fragment,useEffect,useRef,useState} from 'react';
+import {Fragment,useEffect,useMemo,useRef,useState} from 'react';
 import {Engine,type AcquisitionSetup} from './engine';
 import {Processor,parseRecordingCsv,mean,minimumReference,MAX_CSV_BYTES,type Sample,type AmplitudeUnit} from './signal';
 import {captureRecording} from './recording';
 import {PlaytestLog} from './playtestLog';
 import {connectBoardSerial,connectSerial,selectSerialPort,DEFAULT_EMG_BAUD,UNO_EMG_BAUD,type EmgBaudRate} from './serial';
-import {LIGHT_TRAINING_TARGET,type TrainingSession,type TrialResult,type TrialReviewDecision} from './session';
+import {TRAINING_TRIALS,TRIALS_PER_BLOCK,DEFAULT_TARGET_TOLERANCE,LIGHT_TRAINING_TARGET,isInTargetBand,type TrainingSession,type TrialResult,type TrialReviewDecision} from './session';
 import {parseResultFile,loadResults,saveResults,deleteResult,loadReference,saveReference,matchesReference,type SavedResult} from './records';
 import {HandCue,StageIcon,type HandAction} from './HandCue';
 import {Garden} from './Garden';
@@ -14,9 +14,14 @@ import {BoardMonitor} from './BoardMonitor';
 import {TrialWaveform} from './TrialWaveform';
 import {BoardReading} from './boardSignal';
 
+import {activePlayerId,players,selectPlayer,waterCount,plantStage,plantGrowth,type Player} from './profiles';
+import {PlayerPicker} from './PlayerPicker';
+import {BandResults,Evidence,Trends} from './Evaluation';
+
 const LABELS=['Relaxed','Light contraction','Stronger contraction'];
 const SERIAL_START_TIMEOUT_MS=5000,SIGNAL_STALE_MS=500;
 const percent=(v:number|null)=>v===null?'Not available':`${Math.round(v*100)}%`;
+const targetBandLabel=(target:number,tolerance:number)=>`${percent(target-tolerance)}–${percent(target+tolerance)}`;
 const amplitude=(value:number,unit?:AmplitudeUnit)=>unit==='adc_counts'?`${value.toFixed(2)} ADC counts`:`${value.toFixed(4)} V`;
 const sourceName=(source:string)=>source==='simulation'?'Recorded simulation':source==='serial'?'Reported EMG recording':'Source unknown';
 function download(name:string,body:string,type='application/json'){
@@ -29,8 +34,9 @@ function Wave({values}:{values:number[]}){
 }
 function Results({results,simulated}:{results:TrialResult[];simulated:boolean}){
   const groups=['baseline','practice','final'] as const;
+  const targetBands=[...new Set(results.map(({target,tolerance})=>targetBandLabel(target,tolerance)))];
   return <section className="results"><h2>Session results</h2><p>{simulated?'Synthetic signal only. These results do not measure a person.':'Control performance relative to a comfortable reference, not strength or a health score.'}</p>
-    <div className="table-scroll"><table><thead><tr><th>Measure</th>{groups.map(g=><th key={g}>{g==='baseline'?'Before practice':g==='final'?'After practice':'Practice'}</th>)}</tr></thead><tbody>
+    <BandResults rows={results}/><div className="table-scroll"><table><thead><tr><th>Measure</th>{groups.map(g=><th key={g}>{g==='baseline'?'Before practice':g==='final'?'After practice':'Practice'}</th>)}</tr></thead><tbody>
       {['Valid trials','Time in target','Target error','Steadiness','Time to relax','Relaxation observed','Residual activity'].map((label,i)=><tr key={label}><th>{label}</th>{groups.map(g=>{
         const all=results.filter(r=>r.block===g),valid=all.filter(r=>r.valid),values=valid.flatMap(r=>{const value=i===1?r.inZone:i===2?r.error:i===3?r.variation:i===6?r.residual:r.relaxationMs;return value===null?[]:[value];});
         if(i===1&&values.length){
@@ -39,10 +45,35 @@ function Results({results,simulated}:{results:TrialResult[];simulated:boolean}){
         }
         return <td key={g}>{i===0?`${valid.length} / ${all.length}`:i===5?`${values.length} / ${valid.length}`:!values.length?'Not available':i===4?`${(mean(values)/1000).toFixed(2)} s`:percent(mean(values))}</td>;
       })}</tr>)}
-    </tbody></table></div><p className="fine">Steadiness is the activity standard deviation. Residual activity is measured near the end of rest. Time to relax includes only observed relaxations; the count is shown separately. Only uninterrupted trials with enough valid data enter this summary. Before and after use the same six targets.</p>
+    </tbody></table></div><p className="fine">{targetBands.length>0&&`Scored target bands were ${targetBands.join(' and ')}. `}Steadiness is the activity standard deviation. Residual activity is measured near the end of rest. Time to relax includes only observed relaxations; the count is shown separately. Only uninterrupted trials with enough valid data enter this summary. Before and after use the same target sequence.</p>
   </section>;
 }
+function GardenStatus({drops}:{drops:number}){
+  const growth=plantGrowth(drops),flowers=Math.floor(drops/6);
+  const next=growth===0||growth===6?1:growth<3?3-growth:6-growth;
+  const stage=growth===0||growth===6?'sprout':growth<3?'leafy plant':'flower';
+  return <section className="garden-status" aria-label="Garden progress">
+    <h3>{plantStage(drops)}</h3><p>{next} {next===1?'drop':'drops'} to your next {stage}</p>
+    <div className="water-track" aria-label={growth+' of 6 drops'}>{Array.from({length:6},(_,i)=><i key={i} data-filled={i<growth||undefined}/>)}</div>
+    <strong>{flowers} {flowers===1?'flower':'flowers'} collected</strong>
+    {flowers>0&&<div className="flower-bed" aria-hidden="true">{Array.from({length:Math.min(12,flowers)},(_,i)=><span key={i}>✿</span>)}{flowers>12&&<small>+{flowers-12}</small>}</div>}
+  </section>;
+}
+function HomeGuide(){
+  return <details><summary>Home practice guide</summary><ol><li>Use the forearm placement shown by your instructor. Secure the leads and support your arm.</li><li>Connect the sensor and set a comfortable reference after changing placement.</li><li>Follow the hand cue, hold in the target and relax. Select Rest to pause the session.</li><li>After an interruption, check the signal and select Continue when it is ready.</li></ol></details>;
+}
+function RoundEvaluation({record,engine}:{record:SavedResult;engine:Engine|null}){
+  return <><BandResults rows={record.results}/><Evidence record={record} engine={engine}/></>;
+}
+
 export default function App(){
+  const [player,setPlayer]=useState<Player|null>(()=>{try{return players().find(p=>p.id===activePlayerId())??null;}catch{return null;}});
+  if(!player)return <PlayerPicker onChoose={p=>{selectPlayer(p.id);setPlayer(p);}}/>;
+  return <Training key={player.id} player={player} onSwitch={()=>setPlayer(null)}/>;
+}
+function Training({player,onSwitch}:{player:Player;onSwitch:()=>void}){
+  const [evaluation,setEvaluation]=useState(false),[evaluationId,setEvaluationId]=useState('');
+  const [history,setHistory]=useState(false),[gardenOpen,setGardenOpen]=useState(false);
   const engine=useRef<Engine|null>(null),replay=useRef<Sample[]>([]),replayIndex=useRef(0);
   const board=useRef<BoardReading|null>(null);
   const playtest=useRef<PlaytestLog|null>(null);
@@ -54,7 +85,7 @@ export default function App(){
   const [sourceActive,setSourceActive]=useState(false);
   const [demoView,setDemoView]=useState(false);
   const [setup,setSetup]=useState<AcquisitionSetup>({device:'',electrodePlacement:''});
-  const [savedReference,setSavedReference]=useState(loadReference);
+  const [savedReference,setSavedReference]=useState(()=>loadReference(player.id));
   const [referenceNotice,setReferenceNotice]=useState('');
   const [waveformSlot,setWaveformSlot]=useState<number|null>(null);
   const [sunriseSession,setSunriseSession]=useState<TrainingSession|null>(null);
@@ -129,6 +160,7 @@ export default function App(){
     setSetup({device:'',electrodePlacement:''});setWaveformSlot(null);setReferenceNotice('');
     board.current=source==='board'?new BoardReading():null;
     engine.current=source==='board'?null:new Engine(source,notch);
+    if(engine.current)engine.current.playerId=player.id;
     lastReceived.current=performance.now();setError('');setSaveNotice('');setViewed(null);setSourceActive(false);return true;
   }
   async function connect(source:'serial'|'board',baudRate:EmgBaudRate=UNO_EMG_BAUD){
@@ -165,7 +197,7 @@ export default function App(){
             setSavedReference(saveReference({
               conditionId:e.conditionId,config:e.config,calibration:e.calibration,setup:e.referenceSetup,baudRate,
               protocol:e.calibrationRun.protocol,
-            }));
+            },player.id));
             setReferenceNotice('Reference saved on this browser.');
           }catch{setReferenceNotice('Could not save the reference on this browser. You can still train on this page.');}
         }
@@ -201,8 +233,16 @@ export default function App(){
     catch(ex){setError((ex as Error).message);}
   }
   async function openResults(file:File){
-    try{if(file.size>20_000_000)throw new Error('Choose a results JSON smaller than 20 MB.');const records=parseResultFile(await file.text());setViewed(records.at(-1)!);setError('');try{saveResults(records);setSaved(loadResults());setSaveError('');}catch(ex){setSaveError((ex as Error).message);}}
+    try{if(file.size>20_000_000)throw new Error('Choose a results JSON smaller than 20 MB.');const localIds=new Set(players().map(p=>p.id));
+      const records=parseResultFile(await file.text()).map(r=>r.playerId&&!localIds.has(r.playerId)?{...r,playerId:undefined}:r);
+      setError('');try{saveResults(records);const all=loadResults();setSaved(all);const imported=all.find(r=>r.id===records.at(-1)!.id);
+      if(imported&&(!imported.playerId||imported.playerId===player.id)){setViewed(imported);setEvaluationId(imported.id);}else setViewed(null);
+      if(imported?.playerId&&imported.playerId!==player.id)setError('This round is saved in its owner’s garden.');
+      setSaveError('');}catch(ex){const latest=records.at(-1)!;if(!latest.playerId||latest.playerId===player.id)setViewed(latest);setSaveError((ex as Error).message);}}
     catch(ex){setError((ex as Error).message);}
+  }
+  function assignToPlayer(record:SavedResult){
+    const own={...record,playerId:player.id};saveResults([own]);setSaved(loadResults());setViewed(own);setEvaluationId(own.id);
   }
   const action=(fn:()=>void)=>{try{fn();setError('');refresh();}catch(ex){setError((ex as Error).message);}};
   const e=engine.current,s=e?.session,cal=e?.calibrationRun,col=e?.collection;
@@ -213,6 +253,16 @@ export default function App(){
     try{const data=e.export();saveResults(parseResultFile(JSON.stringify({...data,sessions:data.sessions.slice(-1),windows:undefined,events:undefined,examples:undefined,model:undefined})));setSaved(loadResults());setSaveNotice('Completed trials saved on this browser.');setSaveError('');}
     catch(ex){setSaveError((ex as Error).message);}
   },[s,s?.state,completed]);
+  const personal=useMemo(()=>saved.filter(r=>r.playerId===player.id).sort((a,b)=>Date.parse(b.createdAt)-Date.parse(a.createdAt)||b.number-a.number),[saved,player.id]);
+  const unassigned=saved.filter(r=>!r.playerId);
+  const currentRound=personal.find(r=>r.createdAt===e?.createdAt);
+  const evaluationRound=(viewed&&!viewed.playerId&&viewed.id===evaluationId?viewed:undefined)??personal.find(r=>r.id===evaluationId)??currentRound??personal[0];
+  const drops=useMemo(()=>waterCount(player.id),[saved,player.id]);
+  function switchPlayer(){
+    if(connecting||e?.busy||board.current)return;
+    if(e?.raw.length&&!window.confirm('Switch gardener and close this recording? Download the raw signal first if needed.'))return;
+    onSwitch();
+  }
   const fresh=!!e?.latest&&e.processor.ready&&e.latest.quality==='good'&&sourceActive&&performance.now()-lastReceived.current<SIGNAL_STALE_MS;
   const needsReconnect=e?.source==='serial'&&!e.busy&&(!sourceActive||stalled.current);
   const reusableReference=e?.source==='serial'&&!e.calibration&&!e.busy&&fresh&&!connecting&&
@@ -236,11 +286,12 @@ export default function App(){
     }
   }
   const level=fresh?e?.level??0:0,target=collecting?col!.target:s?.target??.3;
+  const tolerance=collecting?DEFAULT_TARGET_TOLERANCE:s?.tolerance??DEFAULT_TARGET_TOLERANCE;
   const rest=calRunning?cal!.instruction==='rest':collecting?col!.resting||col!.label===0:training?s!.phase==='rest':true;
   const trainingTarget=training&&s?.phase==='contract'
     ? target===LIGHT_TRAINING_TARGET?'Light squeeze':'Firmer squeeze'
     : null;
-  const inTarget=Math.abs(level-target)<=.1;
+  const inTarget=isInTargetBand(level,target,tolerance);
   const referenceFeedback=fresh&&calRunning&&cal?.protocol==='quick'&&!rest;
   const referenceSqueeze=referenceFeedback&&cal.detectsSqueeze(e!.latest!.rms);
   // Use a small confirmation stream until the calibrated activity scale is available.
@@ -260,7 +311,7 @@ export default function App(){
     }else if(rest){
       title=fresh&&s!.relaxed?'Hand relaxed':'Relax';description='Open your hand and take a breath.';
     }else{
-      title=inTarget?'That’s it! Hold it':level>target+.1?'Ease off a little':'Squeeze a little more';
+      title=inTarget?'That’s it! Hold it':level>target+tolerance?'Ease off a little':'Squeeze a little more';
       description=trainingTarget??'';
     }
     symbol=rest?'✋':'✊';remaining=s!.remaining;
@@ -313,7 +364,7 @@ export default function App(){
   }
   function restartReplay(){if(!e)return;pendingExport.current=null;const next=new Engine('replay',e.processor.notch,e.referenceV,e.adcMax,e.processor.amplitudeUnit,e.processor.notch100Hz);next.originalSource=e.originalSource;next.originalNotch50Hz=e.originalNotch50Hz;engine.current=next;replayIndex.current=0;lastReceived.current=performance.now();running.current=true;setSourceActive(true);setError('');refresh();}
   function removeSaved(record:SavedResult){if(!window.confirm('Delete this saved result from this browser? Keep a downloaded backup first.'))return;try{deleteResult(record.id);setSaved(loadResults());if(viewed?.id===record.id)setViewed(null);setSaveError('');}catch(ex){setSaveError((ex as Error).message);}}
-  const phaseLabel=isReplay?'Recording replay':calRunning?`Reference · ${cal!.step===0?'rest':cal!.instruction==='contract'?`squeeze ${(cal!.step+1)/2} of ${cal!.contractionCount}`:'rest break'}`:collecting?`${heldOut?'Test':'Training'} examples · Trial ${col!.trial+1} of 18`:finished?s!.state==='complete'?'Session complete':'Session ended':s?`${s.block==='baseline'?'Before practice':s.block==='final'?'After practice':`Practice round ${s.round} of 3`} · Trial ${s.trial%6+1} of 6`:'Muscle control practice';
+  const phaseLabel=isReplay?'Recording replay':calRunning?`Reference · ${cal!.step===0?'rest':cal!.instruction==='contract'?`squeeze ${(cal!.step+1)/2} of ${cal!.contractionCount}`:'rest break'}`:collecting?`${heldOut?'Test':'Training'} examples · Trial ${col!.trial+1} of 18`:finished?s!.state==='complete'?'Session complete':'Session ended':s?`${s.block==='baseline'?'Before practice':s.block==='final'?'After practice':'Practice'} · Trial ${s.trial%TRIALS_PER_BLOCK+1} of ${TRIALS_PER_BLOCK}`:'Muscle control practice';
   const monitor=playtest.current;
   useEffect(()=>{
     if(!monitor||e?.source!=='serial'||!e.raw.length)return;
@@ -329,29 +380,41 @@ export default function App(){
   return <main>
     <header>
       <span className="brand"><span className="brand-mark">✳</span> EMG Garden</span>
-      <div className="header-actions">
+      <div className="header-actions"><button className="secondary" disabled={connecting||!!e?.busy||!!board.current} onClick={switchPlayer} aria-label={'Switch gardener: '+player.name}>{player.name} ▾</button>
+        <button className="secondary" aria-expanded={evaluation} onClick={()=>setEvaluation(!evaluation)}>Training &amp; Evaluation</button>
         {!board.current&&<span className="status"><i className={fresh?'live':''}/>{signalStatus}</span>}
         {e&&<button type="button" className="secondary demo-toggle" aria-pressed={demoView} onClick={()=>setDemoView(value=>!value)}>Session details</button>}
       </div>
     </header>
+    {evaluation&&<section className="course-panel"><h2>Training &amp; Evaluation</h2><HomeGuide/>
+      <p>Connect the sensor, set a reference and complete a training round. New rounds have five trials before practice, five practice trials and five after practice.</p>
+      <button className="text-button" onClick={()=>{const tools=document.querySelector<HTMLDetailsElement>('.research-tools');if(tools){tools.open=true;document.getElementById('classifier-title')?.focus();}}} disabled={!!board.current}>Open AI classifier training</button>
+      {e&&!finished&&<p>AI state: {demoClassification}. Water follows normalized RMS.</p>}
+      <label>Evaluation round <select aria-label="Evaluation round" value={evaluationRound?.id??''} onChange={event=>setEvaluationId(event.target.value)}>{evaluationRound&&!evaluationRound.playerId&&<option value={evaluationRound.id}>Unassigned · Round {evaluationRound.number}</option>}{!evaluationRound&&<option value="">No personal rounds yet</option>}{personal.map(r=><option key={r.id} value={r.id}>{new Date(r.createdAt).toLocaleString()} · Round {r.number}</option>)}</select></label>
+      <label className="file-label">Import training results<input type="file" accept=".json,application/json" disabled={!!e?.busy} onChange={event=>{const file=event.target.files?.[0];event.target.value='';if(file)void openResults(file);}}/></label>
+      {evaluationRound&&!evaluationRound.playerId&&<button className="secondary" onClick={()=>action(()=>assignToPlayer(evaluationRound))}>Save round in {player.name}’s garden</button>}
+      {evaluationRound? <RoundEvaluation key={evaluationRound.id} record={evaluationRound} engine={e}/>:<p>Complete a trial or import a saved round to inspect its measurements.</p>}
+      {personal.length>0&&<Trends records={personal} playerId={player.id}/>}
+      {e&&<div className="button-row"><button disabled={!e.raw.length||!!e.busy} onClick={()=>exportData('raw')}>Export raw CSV</button><button disabled={!e.raw.length||!!e.busy} onClick={()=>exportData('session')}>Export session JSON</button></div>}
+    </section>}
     {isReplay&&<div className="source-banner"><strong>{sourceName(e!.originalSource)}</strong> File metadata is not independently verified. Inspection only.{!e!.processor.canCheckClipping&&' ADC settings unknown; clipping cannot be checked.'}{e!.originalNotch50Hz===null&&' Original notch setting unknown; replay uses no notch.'}</div>}
     {error&&<div className="alert" role="alert">{error}</div>}
     {saveError&&<div className="alert" role="alert">{saveError}</div>}
     {board.current?<BoardMonitor reading={board.current} connected={sourceActive} connecting={connecting}
-      onConnect={()=>void connect('board')} onClose={()=>void closeBoard()} download={download}/>:!e?<section className="welcome">
+      onConnect={()=>void connect('board')} onClose={()=>void closeBoard()} download={download}/>:!e||gardenOpen&&!e.busy?<section className="welcome">
       <div className="welcome-copy">
-        <h1>Practice steadier <em>muscle control.</em></h1>
+        <h1>My <em>garden</em></h1><GardenStatus drops={drops}/>
         <p>Gently squeeze, hold steady and relax. See your effort change the water you give the flower.</p>
         <div className="button-row">
-          <button className="primary" disabled={connecting} onClick={()=>void connect('serial')}>Connect EMG</button>
-        </div>
+          <button className="primary" disabled={connecting} onClick={()=>e?setGardenOpen(false):void connect('serial')}>{personal.length?'Continue growing':e?'Return to training':'Connect EMG'}</button>
+        </div><HomeGuide/>
       </div>
-      <div className="welcome-garden"><Garden preview/></div>
+      <div className="welcome-garden"><Garden preview growth={plantGrowth(drops)}/></div>
     </section>:<>
       {demoView&&<DemoDashboard
         source={signalStatus}
         effort={hasEffort?displayedActivity:'Not available'}
-        target={hasTarget?percent(target-.1)+'–'+percent(target+.1):'No active target'}
+        target={hasTarget?targetBandLabel(target,tolerance):'No active target'}
         classification={demoClassification}
         heldOut={heldOut}
         replay={isReplay}
@@ -360,7 +423,11 @@ export default function App(){
       <section className="training-layout" data-stage={stage}>
         <div className="garden-panel">
           <div className="panel-heading"><span>{phaseLabel}</span><span className="source-chip">{isReplay?'Replay':fresh?'Live EMG':'Waiting for signal'}</span></div>
-          <Garden level={gardenLevel} target={target} showEffort={hasEffort} showTarget={hasTarget} showWater={hasEffort||referenceFeedback} resting={rest&&!previewFlow} rewarded={wateringReward} effects={gardenEffects} daylight={daylight} confirmTarget={liveTarget} targetPulse={targetFeedback.pulse}/>
+          {e.source==='serial'&&!heldOut&&<div className="live-rms" role="group" aria-label="Live RMS">
+            <span>Live RMS</span>
+            <strong>{fresh&&e.latest?amplitude(e.latest.rms,e.processor.amplitudeUnit):'—'}</strong>
+          </div>}
+          <Garden growth={plantGrowth(drops)} holdFraction={hasTarget&&training?s!.holdFraction:0} level={gardenLevel} target={target} tolerance={tolerance} showEffort={hasEffort} showTarget={hasTarget} showWater={hasEffort||referenceFeedback} resting={rest&&!previewFlow} rewarded={wateringReward} effects={gardenEffects} daylight={daylight} confirmTarget={liveTarget} targetPulse={targetFeedback.pulse}/>
           <p className="garden-caption">
             {guidance}{wateringReward&&<span className="reward-note" role="status">Flower watered!</span>}
           </p>
@@ -410,9 +477,14 @@ export default function App(){
         </div>
       </section>
       {isReplay&&<div className="session-progress"><span>{(replayIndex.current/2000).toFixed(1)} / {(replay.current.length/2000).toFixed(1)} seconds</span><progress aria-label="Replay position" value={replayIndex.current} max={replay.current.length}/></div>}
-      {(training||paused||finished)&&<div className="session-progress"><span>{s!.results.length} of 30 trials completed</span><progress aria-label="Training progress" value={s!.results.length} max="30"/></div>}
+      {(training||paused||finished)&&<div className="session-progress"><span>{s!.results.length} of {TRAINING_TRIALS} trials completed</span><progress aria-label="Training progress" value={s!.results.length} max={TRAINING_TRIALS}/></div>}
+      {finished&&<p className="garden-harvest"><button className="text-button" onClick={()=>{setGardenOpen(true);setEvaluation(false);window.scrollTo?.(0,0);}}>My garden</button> · {s!.results.filter(t=>t.valid&&t.rewarded).length} drops earned this round · {Math.floor(drops/6)} flowers in your garden</p>}
       {finished&&<Results results={s!.results} simulated={false}/>}
     </>}
+    <section className="garden-history"><button className="secondary" aria-expanded={history} onClick={()=>setHistory(!history)}>Garden history</button>
+      {history&&<><h2>{player.name}’s garden</h2><GardenStatus drops={drops}/><Trends records={personal} playerId={player.id}/>
+        {personal.map(r=><p key={r.id}><button className="text-button" onClick={()=>{setEvaluationId(r.id);setEvaluation(true);window.scrollTo?.(0,0);}}>{new Date(r.createdAt).toLocaleString()} · Round {r.number} · {sourceName(r.originalSource)}</button></p>)}</>}
+    </section>
     {!board.current&&<details className="research-tools"><summary>Setup &amp; research tools</summary><div className="tools-grid">
       <section><h2>Signal source</h2><p>Training uses raw EMG at 2,000 samples per second.</p>
         <div className="button-row">
@@ -439,7 +511,7 @@ export default function App(){
         })}>Full reference (70 seconds)</button>}
       </section>
       <section><h2>Signal check</h2>{heldOut?<p>Effort feedback is hidden during test examples.</p>:<><Wave values={e?.windows.slice(-100).map(f=>f.rms)??[]}/><dl><div><dt>RMS</dt><dd>{e?.latest?amplitude(e.latest.rms,e.processor.amplitudeUnit):'No signal'}</dd></div><div><dt>Quality</dt><dd>{fresh?'Good':e&&!e.processor.ready?'Settling signal':e?.latest?.quality==='good'?'Waiting for signal':e?.latest?.quality??'Waiting'}</dd></div><div><dt>Sample gaps</dt><dd>{e?.processor.gaps??0}</dd></div><div><dt>Activity / reference</dt><dd>{e?.calibration?fresh?percent(e.level):'Waiting for signal':'Not calibrated'}</dd></div></dl><p className="fine">RMS is the amplitude of the processed waveform. Relative activity is measured against your comfortable reference.</p></>}</section>
-      <section><h2>Optional AI classifier</h2><p>Water follows continuous RMS activity. The classifier separately estimates relaxed, light and stronger contraction states.</p><p className="classifier-state">{heldOut?'Prediction hidden during test examples.':!fresh?'No fresh prediction':e?.classification?`${LABELS[e.classification.label]} · ${percent(e.classification.confidence)}`:'Classifier not trained or uncertain'}</p><button className="secondary" disabled={!e?.calibration||!fresh||e.busy||isReplay} onClick={()=>action(()=>{e!.startCollection();setWaveformSlot(null);})}>Collect 18 labelled trials</button>
+      <section><h2 id="classifier-title" tabIndex={-1}>Optional AI classifier</h2><p>Water follows continuous RMS activity. The classifier separately estimates relaxed, light and stronger contraction states.</p><p className="classifier-state">{heldOut?'Prediction hidden during test examples.':!fresh?'No fresh prediction':e?.classification?`${LABELS[e.classification.label]} · ${percent(e.classification.confidence)}`:'Classifier not trained or uncertain'}</p><button className="secondary" disabled={!e?.calibration||!fresh||e.busy||isReplay} onClick={()=>action(()=>{e!.startCollection();setWaveformSlot(null);})}>Collect 18 labelled trials</button>
         {col?.error&&<p role="alert">{col.error}</p>}
         {col?.state==='complete'&&<>
           <details>
@@ -477,9 +549,9 @@ export default function App(){
             : monitor?'Starting local recording…':'Local recording starts when live EMG arrives.'}</p>
         {monitor&&<p className="fine">Playtest ID {monitor.id}</p>}
         {saveNotice&&<p role="status">{saveNotice}</p>}<a href="/README.md" target="_blank" rel="noreferrer">Setup and protocol guide</a></section>
-      <section><h2>Saved results</h2><p className="fine">Completed trials are saved only in this browser. Raw waveforms are not saved here. Download a backup before clearing browser data.</p><label className="file-label">Open results JSON<input type="file" accept=".json,application/json" disabled={!!e?.busy} onChange={ev=>{const file=ev.target.files?.[0];if(file)void openResults(file);ev.target.value='';}}/></label>{!saved.length?<p>No saved results.</p>:<ul className="saved-list">{saved.map(record=><li key={record.id}><span>{new Date(record.createdAt).toLocaleString('en-GB')} · Round {record.number}<small>{sourceName(record.originalSource)} · {record.results.length} trials · {record.state}</small></span><button className="text-button" onClick={()=>setViewed(record)}>View</button><button className="text-button" onClick={()=>removeSaved(record)}>Delete</button></li>)}</ul>}</section>
+      <section><h2>Saved results</h2><p className="fine">Completed trials are saved only in this browser. Raw waveforms are not saved here. Download a backup before clearing browser data.</p><label className="file-label">Open results JSON<input type="file" accept=".json,application/json" disabled={!!e?.busy} onChange={ev=>{const file=ev.target.files?.[0];if(file)void openResults(file);ev.target.value='';}}/></label>{!personal.length&&!unassigned.length?<p>No saved results.</p>:<ul className="saved-list">{[...personal,...unassigned].map(record=><li key={record.id}><span>{new Date(record.createdAt).toLocaleString('en-GB')} · Round {record.number}<small>{!record.playerId?'Unassigned · ':''}{sourceName(record.originalSource)} · {record.results.length} trials · {record.state}</small></span><button className="text-button" onClick={()=>setViewed(record)}>View</button><button className="text-button" onClick={()=>removeSaved(record)}>Delete</button></li>)}</ul>}</section>
     </div></details>}
-    {viewed&&<section className="saved-review"><div className="saved-heading"><h2>Saved result · Round {viewed.number}</h2><button className="text-button" onClick={()=>setViewed(null)}>Close result</button></div><p>Read-only · {sourceName(viewed.originalSource)} · {viewed.state}</p><p className="fine">Reported source is file metadata, not an independently verified measurement. Comfortable reference {amplitude(viewed.calibration.reference,viewed.config.amplitudeUnit)}. Condition {viewed.conditionId}.</p><Results results={viewed.results} simulated={viewed.originalSource==='simulation'}/><button className="secondary" onClick={()=>download(`emg-garden-result-${viewed.number}.json`,JSON.stringify(viewed))}>Download saved result</button></section>}
+    {viewed&&<section className="saved-review"><div className="saved-heading"><h2>Saved result · Round {viewed.number}</h2><button className="text-button" onClick={()=>setViewed(null)}>Close result</button></div><p>Read-only · {sourceName(viewed.originalSource)} · {viewed.state}</p><p className="fine">Reported source is file metadata, not an independently verified measurement. Comfortable reference {amplitude(viewed.calibration.reference,viewed.config.amplitudeUnit)}. Condition {viewed.conditionId}.</p>{!viewed.playerId&&<button className="secondary" onClick={()=>action(()=>assignToPlayer(viewed))}>Assign this round to {player.name}</button>}<Results results={viewed.results} simulated={viewed.originalSource==='simulation'}/><button className="secondary" onClick={()=>download(`emg-garden-result-${viewed.number}.json`,JSON.stringify(viewed))}>Download saved result</button></section>}
     <footer>EMG biofeedback prototype · Comfortable effort, not maximum effort · Stop if uncomfortable</footer>
   </main>;
 }

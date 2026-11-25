@@ -2,6 +2,7 @@
 import {act} from 'react';
 import {createRoot,type Root} from 'react-dom/client';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
+import {selectPlayer,createPlayer} from './profiles';
 import App from './App';
 import {DemoSignal} from './test/simulation';
 import {loadReference,loadResults} from './records';
@@ -40,7 +41,7 @@ async function reopenApp(){
   await act(async()=>{root.unmount();root=createRoot(container);root.render(<App/>);});
 }
 beforeEach(async()=>{
-  localStorage.clear();
+  localStorage.clear();selectPlayer(createPlayer('Test gardener').id);
   vi.useFakeTimers();vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);
   vi.stubGlobal('fetch',vi.fn(async()=>({ok:false})));
   vi.stubGlobal('URL',{createObjectURL:vi.fn(()=>'blob:test'),revokeObjectURL:vi.fn()});
@@ -51,6 +52,18 @@ beforeEach(async()=>{
 afterEach(async()=>{
   await act(async()=>{root.unmount();});container.remove();Reflect.deleteProperty(navigator,'serial');
   vi.useRealTimers();vi.unstubAllGlobals();vi.restoreAllMocks();
+});
+it('shows current RMS with units before calibration and clears the number on signal loss',async()=>{
+  await startRecording();
+  const value=()=>container.querySelector('[aria-label="Live RMS"] strong')?.textContent??'';
+  const rest=value();
+  expect(rest).toMatch(/^\d+\.\d{2} ADC counts$/);
+  await act(async()=>{feedSignal(1000,.6);});
+  expect(parseFloat(value())).toBeGreaterThan(parseFloat(rest));
+  await act(async()=>{vi.advanceTimersByTime(550);});
+  expect(value()).toBe('—');
+  await act(async()=>{feedSignal(500,.3);});
+  expect(value()).toMatch(/ADC counts$/);
 });
 it('saves a completed reference before any training and restores it after reopening',async()=>{
   await startRecording();
@@ -174,23 +187,23 @@ it('labels the completed session without showing a new first trial',async()=>{
   await act(async()=>{
     button('Start training').click();
     feedSignal(30000);
-    for(let trial=0;trial<30;trial++){
+    for(let trial=0;trial<15;trial++){
       feedSignal(5000,trial===1?0:trial%2===0?.3:.6);
       feedSignal(5000);
     }
   });
-  expect(container.textContent).toContain('30 of 30 trials completed');
+  expect(container.textContent).toContain('15 of 15 trials completed');
   expect(container.querySelector('.panel-heading')?.textContent).toContain('Session complete');
   expect(loadResults()[0]).toMatchObject({state:'complete',originalSource:'serial'});
   expect(loadResults()[0].config).toMatchObject({amplitudeUnit:'adc_counts',adcMax:1023,referenceV:null});
-  expect(loadResults()[0].results).toHaveLength(30);
+  expect(loadResults()[0].results).toHaveLength(15);
   expect(loadResults()[0].results[0]).toMatchObject({rewarded:true,inZone:1});
   expect(loadResults()[0].results[1]).toMatchObject({rewarded:false,inZone:0});
   await act(async()=>{root.unmount();root=createRoot(container);root.render(<App/>);});
   await act(async()=>{button('View').click();});
   expect(container.querySelector('.saved-review')?.textContent).toContain('Read-only');
   expect(container.querySelector('.saved-review')?.textContent).toContain('ADC counts');
-  expect(container.querySelector('.saved-review')?.textContent).toContain('6 / 6');
+  expect(container.querySelector('.saved-review')?.textContent).toContain('5 / 5');
 },10000);
 async function chooseFile(label:string,content:string){
   const input=Array.from(container.querySelectorAll('label')).find(l=>l.textContent?.includes(label))?.querySelector('input[type="file"]');
@@ -235,6 +248,7 @@ it('hides effort feedback during held-out classifier trials',async()=>{
   await act(async()=>{button('Session details').click();button('Collect 18 labelled trials').click();feedSignal(120000,.4);});
   expect(container.querySelector('.panel-heading')?.textContent).toContain('Test examples');
   expect(container.querySelector('.garden-panel')?.textContent).not.toContain('Target');
+  expect(container.querySelector('[aria-label="Live RMS"]')).toBeNull();
   expect(container.querySelector('.tools-grid dl')).toBeNull();
   const demo=container.querySelector('.demo-dashboard');
   expect(demo?.textContent).toContain('Live feedback is hidden during test examples.');
@@ -296,17 +310,17 @@ it('shows consistent hand illustrations for relax, squeeze and steady instructio
   expect(garden()?.textContent).not.toMatch(/\d+%/);
   expect(garden()?.querySelector('svg')?.getAttribute('aria-label')).not.toMatch(/percent/i);
   expect(garden()?.querySelector('[data-in-zone]')).toBeNull();
-  await act(async()=>{feedSignal(1000,.3);});
+  await act(async()=>{feedSignal(400,.3);});
   expect(cue()).toBe('That’s it! Hold it');
   expect(container.querySelector('[data-hand-action="hold"] svg')).not.toBeNull();
   expect(garden()?.querySelector('[data-in-zone]')).not.toBeNull();
   expect(garden()?.querySelector('.reward-note')).toBeNull();
-  await act(async()=>{feedSignal(1600,.3);});
+  await act(async()=>{feedSignal(300,.3);});
   expect(garden()?.querySelector('.reward-note')?.textContent).toBe('Flower watered!');
   await act(async()=>{feedSignal(1000,.9);});
   expect(cue()).toBe('Ease off a little');
   expect(garden()?.querySelector('[data-in-zone]')).toBeNull();
-  await act(async()=>{feedSignal(6500,0);});
+  await act(async()=>{feedSignal(8500,0);});
   expect(container.querySelector('.instruction')?.textContent).toContain('Firmer squeeze');
 });
 it('plays target feedback once per armed entry and logs the qualified sample',async()=>{
@@ -356,6 +370,26 @@ it('plays target feedback once per armed entry and logs the qualified sample',as
   }
 });
 
+it('uses the wider firmer target band for live cues, reward and saved results',async()=>{
+  await startRecording();
+  await act(async()=>{button('Set my reference').click();completeReference();});
+  await act(async()=>{
+    button('Session details').click();
+    button('Start training').click();
+    feedSignal(30000);
+    feedSignal(5000,.3);
+    feedSignal(5000);
+  });
+  await act(async()=>{feedSignal(2500,.45);});
+  expect(container.querySelector('.demo-live')?.textContent).toContain('40%–80%');
+  expect(container.querySelector('.instruction h1')?.textContent).toBe('That’s it! Hold it');
+  expect(container.querySelector('.garden-scene')?.hasAttribute('data-in-zone')).toBe(true);
+  expect(container.querySelector('.reward-note')?.textContent).toBe('Flower watered!');
+  await act(async()=>{feedSignal(2500,.45);feedSignal(5000);});
+  await act(async()=>{button('End session').click();});
+  expect(loadResults()[0].results[1]).toMatchObject({target:.6,tolerance:.2,inZone:1,rewarded:true});
+});
+
 it('confirms observed relaxation only during fresh running training rest',async()=>{
   await startRecording();
   await act(async()=>{button('Set my reference').click();completeReference();});
@@ -397,10 +431,10 @@ it('keeps serial training paused after a stall until fresh samples arrive and Co
   expect(container.querySelector('.tools-grid dl')?.textContent).toContain('Waiting for signal');
   expect(container.querySelector('.garden-pot-rim')).toBeNull();
   expect(container.querySelector('.garden-target-hit')).toBeNull();
-  expect(container.textContent).toContain('0 of 30 trials completed');
+  expect(container.textContent).toContain('0 of 15 trials completed');
   await act(async()=>{signal.index+=1000;feedSignal(700,.3);});
   expect(container.querySelector('.instruction h1')?.textContent).toBe('Take a break');
-  expect(container.textContent).toContain('0 of 30 trials completed');
+  expect(container.textContent).toContain('0 of 15 trials completed');
   expect(button('Continue').disabled).toBe(false);
   await act(async()=>{button('Continue').click();feedSignal(4000,.3);feedSignal(5000);});
   expect(container.querySelector('.instruction h1')?.textContent).not.toBe('Take a break');
@@ -514,11 +548,11 @@ it('shows labelled session metrics during training and valid before-and-after co
   expect(dashboard()).toContain('Current effort');
   expect(dashboard()).toContain('20%–40%');
   expect(dashboard()).toContain('Not trained');
-  await act(async()=>{feedSignal(299000);});
+  await act(async()=>{feedSignal(149000);});
   expect(dashboard()).toContain('Before practice');
   expect(dashboard()).toContain('After practice');
   expect(dashboard()).toContain('Time in target');
-  expect(dashboard()?.match(/6 \/ 6/g)).toHaveLength(2);
+  expect(dashboard()?.match(/5 \/ 5/g)).toHaveLength(2);
   await act(async()=>{button('Session details').click();});
   expect(container.querySelector('.demo-dashboard')).toBeNull();
 },10000);

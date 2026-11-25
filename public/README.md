@@ -4,7 +4,7 @@ EMG Garden 1.0.1 is an English local software release for an EMG biofeedback res
 
 1. Open the local site directly in Chrome. Select **Connect EMG** and choose your Uno serial port. This uses the 2 kHz acquisition sketch at 250000 baud. For the original two-column firmware, use **Setup & research tools → Connect board**.
 2. When the signal is ready, select **Set my reference**. Relax for five seconds, then squeeze comfortably for five seconds. The 70-second reference used in the research protocol is available under **Setup & research tools**.
-3. Select **Start training**. Follow the light or firmer squeeze cue, hold when the pot glows, then relax. **Flower watered!** marks a steady hold.
+3. Select **Start training** for five baseline trials, five practice trials and five final trials. Follow the light or firmer squeeze cue. Keep your effort in target for 0.3 seconds to see **Flower watered!** Keep holding until the relax cue.
 4. Use **Rest** to pause and **End session** to stop.
 5. Open **Setup & research tools** to inspect signal quality, review individual labelled trials, retake excluded trials, fit the classifier or download local data. Download **session JSON** and **raw CSV** separately after stopping or finishing the step. The pair shares a frozen recording ID. JSON keeps completed results from all rounds on the same source.
 

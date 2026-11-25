@@ -1,11 +1,13 @@
 import {Processor,activity,MAX_SAMPLES,SAMPLE_RATE,type Sample,type Frame,type Calibration,type OriginalSource,type AmplitudeUnit} from './signal';
-import {TrainingSession,CalibrationRun,ExampleCollection,type CalibrationProtocol,type TrialReviewDecision} from './session';
+import {TRAINING_TRIALS,TrainingSession,CalibrationRun,ExampleCollection,type CalibrationProtocol,type TrialReviewDecision} from './session';
 import {fitModel,PredictionHistory,type Example,type Model,type ModelReport} from './model';
 export type Source='simulation'|'serial'|'replay';
 export const VERSION='emg-garden-1.0.0';
 type ModelEvaluation={examples:Example[];report:ModelReport};
 export type AcquisitionSetup={device:string;electrodePlacement:string};
 export class Engine {
+  playerId?:string;
+  private referenceProtocol?:CalibrationProtocol;
   calibration:Calibration|null=null;calibrationRun:CalibrationRun|null=null;session:TrainingSession|null=null;collection:ExampleCollection|null=null;
   referenceSetup:AcquisitionSetup|null=null;
   model:Model|null=null;report:ModelReport|null=null;latest:Frame|null=null;
@@ -15,7 +17,7 @@ export class Engine {
   private predictionReset=true;
   private referenceHistory=new Map<string,Calibration>();
   private modelHistory=new Map<Model,{id:number;model:Model;evaluation?:ModelEvaluation}>();
-  private sessions:{startedAt:number;conditionId:string;session:TrainingSession;modelReport:ModelReport|null}[]=[];private referenceNumber=0;
+  private sessions:{setup?:AcquisitionSetup;protocol?:CalibrationProtocol;startedAt:number;conditionId:string;session:TrainingSession;modelReport:ModelReport|null}[]=[];private referenceNumber=0;
   originalSource:OriginalSource;originalNotch50Hz:boolean|null;
   readonly createdAt=new Date().toISOString();
   constructor(public source:Source,notch=false,public referenceV:number|null=3.3,public adcMax:number|null=4095,amplitudeUnit?:AmplitudeUnit,notch100Hz=false){this.processor=new Processor(notch,referenceV,adcMax,amplitudeUnit,notch100Hz);this.originalSource=source==='replay'?'unknown':source;this.originalNotch50Hz=source==='replay'?null:notch;}
@@ -92,7 +94,7 @@ export class Engine {
     this.requireCapacity(run.totalMs);
     if(this.busy||this.latest?.quality!=='good')throw new Error('Wait for a clean signal before calibration.');
     this.calibration=null;this.model=null;this.report=null;this.resetPredictions();this.collection=null;this.session=null;
-    this.referenceNumber++;this.calibrationRun=run;run.start(this.time);this.error='';
+    this.referenceNumber++;this.referenceProtocol=protocol;this.calibrationRun=run;run.start(this.time);this.error='';
     this.referenceSetup=this.source==='serial'&&setup?{device:setup.device.trim(),electrodePlacement:setup.electrodePlacement.trim()}:null;
     const acquisition=this.referenceSetup?{
       device:this.referenceSetup.device||null,electrodePlacement:this.referenceSetup.electrodePlacement||null,
@@ -105,6 +107,7 @@ export class Engine {
     }
     this.referenceNumber++;
     this.calibrationRun=null;
+    this.referenceProtocol=protocol;
     this.calibration={...reference};
     this.referenceSetup={...setup};
     this.referenceHistory.set(this.conditionId,this.calibration);
@@ -113,9 +116,9 @@ export class Engine {
   }
   startTraining(){
     if(this.source==='replay')throw new Error('Replay is for inspection only.');
-    this.requireCapacity(330000);
+    this.requireCapacity(30000+10000*TRAINING_TRIALS);
     if(!this.calibration||this.busy)throw new Error('Complete calibration first.');
-    this.session=new TrainingSession({...this.calibration});this.session.start(this.time);this.sessions.push({startedAt:this.time,conditionId:this.conditionId,session:this.session,modelReport:structuredClone(this.report)});this.error='';this.event('training_started',{session:this.sessions.length,conditionId:this.conditionId});
+    this.session=new TrainingSession({...this.calibration});this.session.start(this.time);this.sessions.push({setup:this.referenceSetup?{...this.referenceSetup}:undefined,protocol:this.referenceProtocol,startedAt:this.time,conditionId:this.conditionId,session:this.session,modelReport:structuredClone(this.report)});this.error='';this.event('training_started',{session:this.sessions.length,conditionId:this.conditionId});
   }
   startCollection(){
     if(this.source==='replay')throw new Error('Replay is for inspection only.');
@@ -149,7 +152,7 @@ export class Engine {
     this.recordModel(this.model,{examples,report:fitted.report});
     this.resetPredictions();this.event('model_fitted',this.report);
   }
-  export(){return {schema:VERSION,source:this.source,originalSource:this.originalSource,createdAt:this.createdAt,config:this.config,calibration:this.calibration,model:this.model,modelReport:this.report,examples:this.collection?.examples??[],trialReview:this.collection?.trialReviews??[],results:this.session?.results??[],sessionState:this.session?.state??'not_started',sessions:this.sessions.map(({startedAt,conditionId,session:s,modelReport},i)=>({number:i+1,startedAt,conditionId,state:s.state,calibration:s.calibration,modelReport,results:s.results})),windows:this.windows,events:this.events,verification:{
+  export(){return {playerId:this.playerId,schema:VERSION,source:this.source,originalSource:this.originalSource,createdAt:this.createdAt,config:this.config,calibration:this.calibration,model:this.model,modelReport:this.report,examples:this.collection?.examples??[],trialReview:this.collection?.trialReviews??[],results:this.session?.results??[],sessionState:this.session?.state??'not_started',sessions:this.sessions.map(({startedAt,conditionId,session:s,modelReport,protocol,setup},i)=>({plannedTrials:TRAINING_TRIALS,protocol,setup,number:i+1,startedAt,conditionId,state:s.state,calibration:s.calibration,modelReport,results:s.results})),windows:this.windows,events:this.events,verification:{
     calibrations:[...this.referenceHistory].map(([id,reference])=>({id,reference})),
     models:[...this.modelHistory.values()],
   }};}

@@ -1,6 +1,22 @@
 import {activity,measureCalibration,minimumReference,mean,median,sd,type Frame,type Calibration} from './signal';
 import type {Example} from './model';
 export const LIGHT_TRAINING_TARGET=.3;
+export const DEFAULT_TARGET_TOLERANCE=.1;
+export const TRIALS_PER_BLOCK=5;
+export const TRAINING_TRIALS=3*TRIALS_PER_BLOCK;
+export function trainingBlock(index:number){
+  return index<TRIALS_PER_BLOCK?'baseline':index<2*TRIALS_PER_BLOCK?'practice':'final';
+}
+const WATER_REWARD_HOLD_MS=300;
+
+const lightTarget={target:LIGHT_TRAINING_TARGET,tolerance:DEFAULT_TARGET_TOLERANCE} as const;
+const firmerTarget={target:.6,tolerance:.2} as const;
+export function getTrainingTarget(trialIndex:number){
+  return trialIndex%2===0?lightTarget:firmerTarget;
+}
+export function isInTargetBand(level:number,target:number,tolerance:number){
+  return level>=target-tolerance&&level<=target+tolerance;
+}
 
 type State='ready'|'running'|'paused'|'complete'|'stopped';
 export type TrialResult={trial:number;block:'baseline'|'practice'|'final';round:number;target:number;tolerance:number;error:number|null;inZone:number|null;variation:number|null;coverage:number;restCoverage:number;residual:number|null;relaxationMs:number|null;rewarded:boolean;interrupted:boolean;valid:boolean;contractStartMs?:number;holdStartMs?:number;holdEndMs?:number;restStartMs?:number;endMs?:number};
@@ -10,10 +26,11 @@ export class TrainingSession {
   private previous:Frame|null=null;private pausedAt=0;private values:number[]=[];private weights:number[]=[];
   private rest:number[]=[];private restMs=0;private pending:TrialResult|null=null;private relaxAt:number|null=null;private relaxationMs:number|null=null;private interrupted=false;private contractStart=0;
   constructor(public calibration:Calibration){}
-  get target(){return this.trial%2===0?LIGHT_TRAINING_TARGET:.6;}
+  get holdFraction(){return Math.min(1,this.hold/WATER_REWARD_HOLD_MS);}
+  get target(){return getTrainingTarget(this.trial).target;}
+  get tolerance(){return getTrainingTarget(this.trial).tolerance;}
   get remaining(){return Math.max(0,((this.phase==='familiar'?30000:5000)-(this.lastTime-this.phaseAt))/1000);}
-  get block(){return this.trial<6?'baseline':this.trial<24?'practice':'final';}
-  get round(){return this.trial<6||this.trial>=24?1:Math.floor((this.trial-6)/6)+1;}
+  get block(){return trainingBlock(this.trial);}
   get relaxed(){return this.state==='running'&&this.phase==='rest'&&this.previous!==null&&this.previous.rms<=this.calibration.restThreshold&&this.relaxAt!==null&&this.lastTime-this.relaxAt>=300;}
   start(t:number){if(this.state!=='ready')return;this.state='running';this.phaseAt=t;this.lastTime=t;}
   pause(reason='Take a break.'){
@@ -29,8 +46,8 @@ export class TrainingSession {
     const start=this.previous?.time??f.time,end=f.time;
     if(this.phase==='contract'&&this.previous){
       const a=activity(this.previous.rms,this.calibration),dt=end-start;
-      this.hold=Math.abs(a-this.target)<=.1?this.hold+dt:0;
-      if(this.hold>=2000)this.rewarded=true;
+      this.hold=isInTargetBand(a,this.target,this.tolerance)?this.hold+dt:0;
+      if(this.hold>=WATER_REWARD_HOLD_MS)this.rewarded=true;
       const weight=Math.max(0,Math.min(end,this.phaseAt+5000)-Math.max(start,this.phaseAt+3000));
       if(weight){this.values.push(a);this.weights.push(weight);}
     }else if(this.phase==='rest'&&this.previous){
@@ -48,12 +65,13 @@ export class TrainingSession {
     else if(this.phase==='contract'){
       const validMs=this.weights.reduce((a,b)=>a+b,0),coverage=Math.min(1,validMs/2000),valid=coverage>=.8&&!this.interrupted;
       const weighted=(fn:(a:number)=>number)=>validMs?this.values.reduce((sum,a,i)=>sum+fn(a)*this.weights[i],0)/validMs:null;
-      this.pending={trial:this.trial+1,block:this.block,round:this.round,target:this.target,tolerance:.1,error:weighted(a=>Math.abs(a-this.target)),inZone:weighted(a=>Math.abs(a-this.target)<=.1?1:0),variation:this.values.length?sd(this.values):null,coverage,restCoverage:0,residual:null,relaxationMs:null,rewarded:this.rewarded,interrupted:this.interrupted,valid,contractStartMs:this.contractStart,holdStartMs:this.phaseAt+3000,holdEndMs:at,restStartMs:at};
+      const {target,tolerance}=getTrainingTarget(this.trial);
+      this.pending={trial:this.trial+1,block:this.block,round:1,target,tolerance,error:weighted(a=>Math.abs(a-target)),inZone:weighted(a=>isInTargetBand(a,target,tolerance)?1:0),variation:this.values.length?sd(this.values):null,coverage,restCoverage:0,residual:null,relaxationMs:null,rewarded:this.rewarded,interrupted:this.interrupted,valid,contractStartMs:this.contractStart,holdStartMs:this.phaseAt+3000,holdEndMs:at,restStartMs:at};
       this.phase='rest';this.relaxAt=null;this.rest=[];this.restMs=0;this.relaxationMs=null;
     }else{
       const r=this.pending!;r.endMs=at;r.restCoverage=Math.min(1,this.restMs/5000);r.residual=this.rest.length?mean(this.rest):null;r.relaxationMs=this.relaxationMs;r.interrupted||=this.interrupted;r.valid&&=r.restCoverage>=.8&&!r.interrupted;
       this.results.push(r);this.trial++;this.pending=null;
-      if(this.trial>=30){this.state='complete';return;}
+      if(this.trial>=TRAINING_TRIALS){this.state='complete';return;}
       this.phase='contract';this.contractStart=at;this.values=[];this.weights=[];this.hold=0;this.rewarded=false;this.interrupted=false;
     }
     this.phaseAt=at;
